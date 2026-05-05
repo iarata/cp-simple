@@ -1,0 +1,8 @@
+name: normal
+probability: 1.0
+horizontal_flip_p: 0.5
+brightness_limit: 0.2
+contrast_limit: 0.2
+use_albumentations: true
+min_area: 16
+min_bbox_size: 2

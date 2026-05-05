@@ -1,0 +1,8 @@
+image_dir: ${dataset.train_images}
+annotation_json: ${dataset.train_annotations}
+output_dir: ${dataset.subset_root}
+percentages: [10, 25]
+percent: 100
+seed: ${train.seed}
+image_mode: copy # one of: symlink, copy, none
+max_preview_images: 16

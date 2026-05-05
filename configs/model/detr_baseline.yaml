@@ -1,0 +1,17 @@
+name: tiny_detr_segmenter
+hidden_dim: 128
+num_queries: 100
+num_encoder_layers: 3
+num_decoder_layers: 3
+nheads: 8
+dim_feedforward: 512
+dropout: 0.1
+eos_coef: 0.1
+cost_class: 1.0
+cost_bbox: 5.0
+cost_mask: 1.0
+bbox_loss_coef: 5.0
+giou_loss_coef: 2.0
+mask_loss_coef: 1.0
+dice_loss_coef: 1.0
+mask_loss_size: 128

@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cps"
+version = "0.1.0"
+description = "Reproducible copy-paste augmentation experiments for COCO2017 instance segmentation."
+readme = "README.md"
+requires-python = "~=3.12.0"
+license = { file = "LICENSE" }
+authors = [{ name = "Alireza Hajebrahimi" }]
+dependencies = [
+    "albumentations",
+    "hydra-core",
+    "loguru",
+    "matplotlib",
+    "numpy",
+    "omegaconf",
+    "opencv-python-headless",
+    "pandas",
+    "pillow",
+    "pycocotools",
+    "python-dotenv",
+    "scipy",
+    "torch",
+    "torchvision",
+    "tqdm",
+    "typer",
+    "wandb",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.8.0"]
+legacy-libcom = ["libcom>=0.1.0", "diffusers>=0.31.0", "transformers>=4.45.0", "accelerate>=1.0.0"]
+
+[project.scripts]
+cps = "cps.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cps"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["cps"]
+extend-exclude = ["tests", "reports", "docs", "models", "notebooks", "data.nosync", ".venv.nosync", ".venv" ]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
+ignore = ["B008", "E501", "RUF012"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

@@ -1,0 +1,14 @@
+name: simple_copy_paste
+probability: 0.8
+max_paste_objects: 3
+target_policy: all # all, underrepresented, class_ids
+class_ids: []
+rare_quantile: 0.25
+min_area: 16
+min_bbox_size: 2
+paste_scale_jitter: [0.75, 1.25]
+max_placement_attempts: 20
+harmonizer_backend: local
+feather_sigma: 2.0
+lbm_steps: 4
+lbm_resolution: 1024

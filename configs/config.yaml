@@ -1,0 +1,31 @@
+defaults:
+  - dataset: coco2017
+  - subset: default
+  - augmentation: normal
+  - model: detr_baseline
+  - train: default
+  - eval: default
+  - wandb: default
+  - _self_
+
+project_name: cps-copy-paste
+checkpoint: null
+
+analysis:
+  attention_samples: 2
+
+augmentation_preview:
+  output_dir: data.nosync/interim/augmentation_previews
+  num_samples: 8
+  dataset_max_images: null
+  seed: ${train.seed}
+
+report:
+  metrics_root: models/runs
+  output_dir: reports
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .

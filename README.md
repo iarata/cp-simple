@@ -1,0 +1,149 @@
+# CPS: Copy-Paste Augmentation Studies for COCO Instance Segmentation
+
+`cps` is a reproducible research codebase for comparing four augmentation strategies on COCO2017-style instance segmentation:
+
+1. normal image augmentation,
+2. Simple Copy-Paste,
+3. PCTNet-style copy-paste harmonization,
+4. LBM-style copy-paste harmonization.
+
+The baseline is intentionally simple: a small DETR-style instance segmenter with a CNN backbone, transformer encoder/decoder, fixed object queries, class/box heads, and a query-conditioned mask head. It is designed for controlled augmentation experiments, not for state-of-the-art COCO results.
+
+## Design notes
+
+- COCO annotations are loaded directly from `instances_*.json` files.
+- Subsets are nested: the same deterministic image order is used for all requested percentages.
+- Copy-paste methods update masks, boxes, areas, labels, image IDs, occlusion, and tiny-mask filtering.
+- PCTNet and LBM support an optional `libcom` backend, but the default is a project-local fallback to avoid brittle legacy dependencies.
+- W&B is optional and disabled by default.
+- CUDA, Apple Silicon MPS, and CPU fallback are supported through `train.device=auto`.
+
+## Install
+
+```bash
+uv python install 3.12
+uv venv --python 3.12
+uv sync --extra dev
+```
+
+Optional legacy harmonization backend:
+
+```bash
+uv sync --extra dev --extra legacy-libcom
+```
+
+The default `harmonizer_backend=local` does not require `libcom` or `diffusers`.
+
+## Expected COCO2017 layout
+
+```text
+data/raw/coco2017/
+├── annotations/
+│   ├── instances_train2017.json
+│   └── instances_val2017.json
+├── train2017/
+└── val2017/
+```
+
+Override paths with Hydra-style CLI overrides when your data lives elsewhere.
+
+## Create nested subsets
+
+```bash
+uv run python -m cps.cli make-subsets --config-name subset
+```
+
+Example with explicit paths:
+
+```bash
+uv run python -m cps.cli make-subsets --config-name subset \
+  subset.image_dir=/path/to/train2017 \
+  subset.annotation_json=/path/to/annotations/instances_train2017.json \
+  subset.percentages='[1,5,10,25]' \
+  subset.output_dir=data/processed/coco_subsets
+```
+
+Each subset directory contains `annotations.json`, optional symlinked/copied images, `metadata.json`, and distribution/sample visualizations.
+
+## Preview augmentations
+
+```bash
+uv run python -m cps.cli preview-augmentations --config-name augment
+```
+
+This writes grids with original, normal, Simple Copy-Paste, PCTNet-style, and LBM-style images under `data/interim/augmentation_previews`.
+
+## Train one experiment
+
+```bash
+uv run python -m cps.cli train --config-name train augmentation=normal subset.percent=100
+uv run python -m cps.cli train --config-name train augmentation=simple_copy_paste subset.percent=10
+uv run python -m cps.cli train --config-name train augmentation=pctnet_copy_paste subset.percent=10 augmentation.target_policy=underrepresented
+uv run python -m cps.cli train --config-name train augmentation=lbm_copy_paste subset.percent=10 augmentation.target_policy=underrepresented
+```
+
+Checkpoints and config snapshots are saved under `models/runs/<method>_<subset>_seed_<seed>/` by default.
+
+## Evaluate a checkpoint
+
+```bash
+uv run python -m cps.cli evaluate --config-name eval checkpoint=models/runs/simple_copy_paste_pct_010_seed_1337/checkpoint_best.pt
+```
+
+Evaluation writes COCO-style metrics, CSV reports, GT/prediction grids, and attention maps under `data/processed/evaluation` unless overridden.
+
+## Run a grid
+
+```bash
+make grid
+```
+
+or explicitly:
+
+```bash
+for pct in 1 5 10 25; do
+  for aug in normal simple_copy_paste pctnet_copy_paste lbm_copy_paste; do
+    uv run python -m cps.cli train --config-name train augmentation=$aug subset.percent=$pct
+  done
+done
+```
+
+## Generate final reports
+
+```bash
+uv run python -m cps.cli report --config-name report
+```
+
+Outputs include `comparison_metrics.csv`, mAP-by-method plots, mAP-vs-subset plots, and per-class AP deltas versus normal augmentation when baseline reports are available.
+
+## Tiny fixture smoke test
+
+The codebase includes a synthetic COCO-style fixture that does not require COCO2017:
+
+```bash
+uv run python -m cps.cli create-tiny-fixture --output-dir data/interim/tiny_coco
+make smoke-test
+```
+
+## W&B
+
+Enable W&B with overrides:
+
+```bash
+uv run python -m cps.cli train --config-name train \
+  wandb.enabled=true wandb.project=cps-copy-paste wandb.mode=online
+```
+
+Use `wandb.mode=offline` for air-gapped runs.
+
+## Shortcut-learning analysis
+
+Validation saves decoder cross-attention overlays for a configurable number of samples:
+
+```bash
+uv run python -m cps.cli evaluate --config-name eval \
+  checkpoint=models/runs/.../checkpoint_best.pt \
+  analysis.attention_samples=8
+```
+
+The `cps.analysis.shortcuts` module also provides boundary-attention diagnostics for samples where pasted-object masks are available.

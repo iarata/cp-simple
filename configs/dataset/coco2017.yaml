@@ -1,0 +1,7 @@
+name: coco2017
+root: data.nosync/raw/coco2017
+train_images: ${dataset.root}/train2017
+val_images: ${dataset.root}/val2017
+train_annotations: ${dataset.root}/annotations/instances_train2017.json
+val_annotations: ${dataset.root}/annotations/instances_val2017.json
+subset_root: data.nosync/processed/coco_subsets

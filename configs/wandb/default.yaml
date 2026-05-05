@@ -1,0 +1,7 @@
+enabled: false
+project: cps-copy-paste
+entity: null
+group: null
+mode: online
+tags: []
+log_checkpoints: false
