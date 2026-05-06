@@ -232,10 +232,9 @@ class TinyDETRSegmenter(nn.Module):
         boxes = self.bbox_embed(hs).sigmoid()
         mask_features = self.mask_feature_proj(features)
         mask_embed = self.mask_embed(hs)
+        # Keep mask logits at feature resolution; losses downsample targets, and
+        # evaluation upsamples only selected masks to avoid B*Q*H*W allocations.
         pred_masks = torch.einsum("bqc,bchw->bqhw", mask_embed, mask_features)
-        pred_masks = F.interpolate(
-            pred_masks, size=src.shape[-2:], mode="bilinear", align_corners=False
-        )
         out: dict[str, torch.Tensor] = {
             "pred_logits": logits,
             "pred_boxes": boxes,
@@ -540,20 +539,28 @@ def outputs_to_predictions(
         kept_boxes = boxes[batch_idx][keep]
         kept_masks = masks[batch_idx][keep]
         order = torch.argsort(kept_scores, descending=True)[:max_detections]
-        for idx in order:
-            label = int(kept_labels[idx].item())
+        ordered_scores = kept_scores[order]
+        ordered_labels = kept_labels[order]
+        ordered_boxes = kept_boxes[order]
+        ordered_masks = kept_masks[order]
+        if ordered_masks.shape[-2:] != (height, width):
+            ordered_masks = F.interpolate(
+                ordered_masks[:, None], size=(height, width), mode="bilinear", align_corners=False
+            )[:, 0]
+        for idx in range(int(order.numel())):
+            label = int(ordered_labels[idx].item())
             cat_id = int(label_to_cat_id.get(label, label))
-            box = kept_boxes[idx].clone()
+            box = ordered_boxes[idx].clone()
             scale = torch.tensor([width, height, width, height], device=box.device)
             box = (box * scale).clamp(min=0)
             box[0::2] = box[0::2].clamp(max=width)
             box[1::2] = box[1::2].clamp(max=height)
-            mask = kept_masks[idx, :height, :width] >= mask_threshold
+            mask = ordered_masks[idx] >= mask_threshold
             predictions.append(
                 {
                     "image_id": image_id,
                     "category_id": cat_id,
-                    "score": float(kept_scores[idx].item()),
+                    "score": float(ordered_scores[idx].item()),
                     "bbox_xyxy": [float(v) for v in box.detach().cpu().tolist()],
                     "mask": mask.detach().cpu().numpy().astype(bool),
                 }
