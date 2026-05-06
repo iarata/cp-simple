@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from cps.augmentations import build_augmentation
 from cps.data.coco import COCODataset, collate_fn
-from cps.data.subsets import percent_slug
+from cps.data.subsets import percent_slug, premade_train_paths, premade_train_variant
 from cps.models.detr import build_model_and_criterion
 from cps.paths import project_path
 from cps.training.checkpoints import load_checkpoint, save_checkpoint
@@ -40,6 +40,9 @@ def configure_torch_threads(cfg: Any) -> None:
 
 def resolve_train_paths(cfg: Any) -> tuple[Path, Path]:
     percent = float(getattr(cfg.subset, "percent", 100))
+    premade_paths = premade_train_paths(cfg.subset, percent)
+    if premade_paths is not None:
+        return premade_paths
     if percent >= 100:
         return project_path(cfg.dataset.train_images), project_path(cfg.dataset.train_annotations)
     slug = percent_slug(percent)
@@ -68,6 +71,14 @@ def build_datasets(cfg: Any) -> tuple[COCODataset, COCODataset]:
         seed=int(cfg.train.seed),
         max_images=getattr(cfg.train, "max_train_images", None),
     )
+    premade_variant = premade_train_variant(cfg.subset)
+    if premade_variant and str(getattr(cfg.augmentation, "name", "none")) != "none":
+        logger.warning(
+            "Training from premade subset variant '{}' with online augmentation '{}'. "
+            "Use augmentation=none to train only on the premade dataset.",
+            premade_variant,
+            cfg.augmentation.name,
+        )
     augmentation = build_augmentation(
         cfg.augmentation,
         train_dataset.coco,
@@ -239,6 +250,13 @@ def experiment_output_dir(cfg: Any) -> Path:
     seed = int(cfg.train.seed)
     name = str(getattr(cfg.train, "run_name", ""))
     if not name:
+        premade_variant = premade_train_variant(cfg.subset)
+        if premade_variant:
+            method = (
+                f"premade_{premade_variant}"
+                if method == "none"
+                else f"premade_{premade_variant}_online_{method}"
+            )
         name = f"{method}_{percent_slug(percent)}_seed_{seed}"
     return project_path(cfg.train.output_dir) / name
 

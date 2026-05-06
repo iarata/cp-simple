@@ -11,7 +11,9 @@ requires-python = "~=3.12.0"
 license = { file = "LICENSE" }
 authors = [{ name = "Alireza Hajebrahimi" }]
 dependencies = [
+    "accelerate>=1.13.0",
     "albumentations",
+    "diffusers>=0.37.1",
     "hydra-core",
     "loguru",
     "matplotlib",
@@ -26,6 +28,7 @@ dependencies = [
     "torch",
     "torchvision",
     "tqdm",
+    "transformers>=5.8.0",
     "typer",
     "wandb",
 ]

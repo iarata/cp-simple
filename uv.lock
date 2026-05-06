@@ -176,7 +176,9 @@ name = "cps"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "accelerate" },
     { name = "albumentations" },
+    { name = "diffusers" },
     { name = "hydra-core" },
     { name = "loguru" },
     { name = "matplotlib" },
@@ -191,6 +193,7 @@ dependencies = [
     { name = "torch" },
     { name = "torchvision" },
     { name = "tqdm" },
+    { name = "transformers" },
     { name = "typer" },
     { name = "wandb" },
 ]
@@ -208,8 +211,10 @@ legacy-libcom = [
 
 [package.metadata]
 requires-dist = [
+    { name = "accelerate", specifier = ">=1.13.0" },
     { name = "accelerate", marker = "extra == 'legacy-libcom'", specifier = ">=1.0.0" },
     { name = "albumentations" },
+    { name = "diffusers", specifier = ">=0.37.1" },
     { name = "diffusers", marker = "extra == 'legacy-libcom'", specifier = ">=0.31.0" },
     { name = "hydra-core" },
     { name = "libcom", marker = "extra == 'legacy-libcom'", specifier = ">=0.1.0" },
@@ -227,6 +232,7 @@ requires-dist = [
     { name = "torch" },
     { name = "torchvision" },
     { name = "tqdm" },
+    { name = "transformers", specifier = ">=5.8.0" },
     { name = "transformers", marker = "extra == 'legacy-libcom'", specifier = ">=4.45.0" },
     { name = "typer" },
     { name = "wandb" },

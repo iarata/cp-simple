@@ -6,3 +6,37 @@ percent: 100
 seed: ${train.seed}
 image_mode: copy # one of: symlink, copy, none
 max_preview_images: 16
+
+premade:
+  enabled: true
+  methods: [none, simple_copy_paste, pctnet_copy_paste, lbm_copy_paste]
+  output_subdir: premade
+  overwrite: true
+  num_workers: 0 # 0 auto, 1 disables parallel processing
+  worker_chunksize: 16
+  image_mode: symlink # unchanged images are symlinked or copied into each premade dataset
+  append_augmented: true # keep original subset images and add augmented copies as new COCO images
+  target_images: all # all, random_percent, underrepresented
+  random_percent: 100
+  rare_quantile: 0.25
+  class_ids: []
+  train_variant: "" # e.g. simple_copy_paste or underrepresented_q025/simple_copy_paste
+  device: mps
+  save_visualizations: true
+  max_preview_images: ${subset.max_preview_images}
+  selection_seed_offset: 911503
+  augmentation_seed_offset: 1000003
+  copy_paste:
+    probability: 1.0
+    max_paste_objects: 3
+    target_policy: all # all, underrepresented, class_ids
+    class_ids: []
+    rare_quantile: ${subset.premade.rare_quantile}
+    min_area: 16
+    min_bbox_size: 2
+    paste_scale_jitter: [0.75, 1.25]
+    max_placement_attempts: 20
+    harmonizer_backend: local
+    feather_sigma: 2.0
+    lbm_steps: 4
+    lbm_resolution: 1024

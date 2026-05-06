@@ -1,4 +1,4 @@
-.PHONY: requirements clean lint format create_environment data make-subsets analyze-subsets preview-augmentations train evaluate grid report smoke-test
+.PHONY: requirements clean lint format create_environment data make-subsets make-premade-subsets analyze-subsets preview-augmentations train evaluate grid report smoke-test
 
 PYTHON_VERSION ?= 3.12
 UV ?= uv
@@ -29,6 +29,9 @@ data:
 
 make-subsets:
 	$(UV) run python -m cps.cli make-subsets --config-name subset
+
+make-premade-subsets:
+	$(UV) run python -m cps.cli make-premade-subsets --config-name subset
 
 analyze-subsets:
 	$(UV) run python -m cps.cli analyze-subsets --config-name subset

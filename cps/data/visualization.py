@@ -131,6 +131,73 @@ def save_distribution_comparison_plot(
     plt.close()
 
 
+def save_instance_count_comparison_plot(
+    before_rows: list[dict[str, Any]],
+    after_rows: list[dict[str, Any]],
+    output_path: str | Path,
+    title: str,
+    before_label: str = "before",
+    after_label: str = "after",
+) -> None:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    before = {int(row["category_id"]): row for row in before_rows}
+    after = {int(row["category_id"]): row for row in after_rows}
+    cat_ids = sorted(set(before) | set(after))
+    names = [str((before.get(cid) or after.get(cid) or {}).get("name", cid)) for cid in cat_ids]
+    before_counts = [before.get(cid, {}).get("instances", 0) for cid in cat_ids]
+    after_counts = [after.get(cid, {}).get("instances", 0) for cid in cat_ids]
+    x = np.arange(len(cat_ids), dtype=np.float32)
+    width = 0.42
+    plt.figure(figsize=(max(10, min(30, len(cat_ids) * 0.3)), 5.5))
+    plt.bar(x - width / 2, before_counts, width=width, label=before_label)
+    plt.bar(x + width / 2, after_counts, width=width, label=after_label)
+    plt.xticks(x, names, rotation=90, fontsize=6)
+    plt.ylabel("Instances")
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=180)
+    plt.close()
+
+
+def save_instance_delta_plot(
+    before_rows: list[dict[str, Any]],
+    after_rows: list[dict[str, Any]],
+    output_path: str | Path,
+    title: str,
+) -> None:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    before = {int(row["category_id"]): row for row in before_rows}
+    after = {int(row["category_id"]): row for row in after_rows}
+    cat_ids = sorted(set(before) | set(after))
+    deltas = [
+        (
+            cid,
+            str((before.get(cid) or after.get(cid) or {}).get("name", cid)),
+            int(after.get(cid, {}).get("instances", 0))
+            - int(before.get(cid, {}).get("instances", 0)),
+        )
+        for cid in cat_ids
+    ]
+    nonzero = [item for item in deltas if item[2] != 0]
+    rows = nonzero or deltas
+    rows = sorted(rows, key=lambda item: (item[2], item[1]), reverse=True)
+    names = [row[1] for row in rows]
+    values = [row[2] for row in rows]
+    colors = ["#2f9e44" if value >= 0 else "#c92a2a" for value in values]
+    plt.figure(figsize=(max(10, min(30, len(rows) * 0.35)), 5.5))
+    plt.bar(range(len(rows)), values, color=colors)
+    plt.axhline(0, color="black", linewidth=0.8)
+    plt.xticks(range(len(rows)), names, rotation=90, fontsize=6)
+    plt.ylabel("Instance count delta")
+    plt.title(title)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=180)
+    plt.close()
+
+
 def save_image_grid(
     images: list[Image.Image], labels: list[str], output_path: str | Path, columns: int = 4
 ) -> None:

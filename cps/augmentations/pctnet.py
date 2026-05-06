@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+from loguru import logger
 from scipy import ndimage
 
 from cps.augmentations.base import CopyPasteConfig
@@ -33,26 +34,41 @@ class PCTNetStyleHarmonizer:
         rng: np.random.Generator | None = None,
     ) -> np.ndarray:
         if self.backend == "libcom":
-            result = self._try_libcom(composite, pasted_mask)
-            if result is not None:
-                return result
+            return self._run_libcom(composite, pasted_mask)
+        if self.backend != "local":
+            raise ValueError("PCTNet harmonizer_backend must be 'local' or 'libcom'.")
         del rng
         return self._local_color_transform(composite, background, pasted_mask)
 
-    def _try_libcom(self, composite: np.ndarray, pasted_mask: np.ndarray) -> np.ndarray | None:
+    def _run_libcom(self, composite: np.ndarray, pasted_mask: np.ndarray) -> np.ndarray:
         try:
             if self._legacy_model is None:
                 from libcom.image_harmonization import ImageHarmonizationModel
 
+                logger.info(
+                    "Initializing libcom ImageHarmonizationModel(model_type='PCTNet', device={!r})",
+                    self.device,
+                )
                 self._legacy_model = ImageHarmonizationModel(
                     device=self.device, model_type="PCTNet"
                 )
+                logger.info("Initialized libcom PCTNet harmonizer.")
             bgr = np.asarray(composite, dtype=np.uint8)[..., ::-1]
             mask = np.asarray(pasted_mask, dtype=np.uint8) * 255
             result_bgr = self._legacy_model(bgr, mask)
             return np.asarray(result_bgr, dtype=np.uint8)[..., ::-1]
-        except Exception:
-            return None
+        except ImportError as exc:
+            raise RuntimeError(
+                "PCTNet harmonizer_backend=libcom was requested, but libcom or one of its "
+                "optional dependencies is not installed. "
+                "Install the optional dependency with `uv sync --extra legacy-libcom` or run "
+                "commands with `uv run --extra legacy-libcom ...`."
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                "PCTNet harmonizer_backend=libcom failed during initialization or inference. "
+                "The local fallback was not used because libcom was explicitly requested."
+            ) from exc
 
     def _local_color_transform(
         self, composite: np.ndarray, background: np.ndarray, pasted_mask: np.ndarray

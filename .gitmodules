@@ -1,0 +1,3 @@
+[submodule "cps/libcom"]
+	path = cps/libcom
+	url = https://github.com/bcmi/libcom

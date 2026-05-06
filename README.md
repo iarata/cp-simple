@@ -14,6 +14,7 @@ The baseline is intentionally simple: a small DETR-style instance segmenter with
 - COCO annotations are loaded directly from `instances_*.json` files.
 - Subsets are nested: the same deterministic image order is used for all requested percentages.
 - Copy-paste methods update masks, boxes, areas, labels, image IDs, occlusion, and tiny-mask filtering.
+- Premade copy-paste variants keep the original subset and append augmented copies by default, so the training set grows.
 - PCTNet and LBM support an optional `libcom` backend, but the default is a project-local fallback to avoid brittle legacy dependencies.
 - W&B is optional and disabled by default.
 - CUDA, Apple Silicon MPS, and CPU fallback are supported through `train.device=auto`.
@@ -33,6 +34,7 @@ uv sync --extra dev --extra legacy-libcom
 ```
 
 The default `harmonizer_backend=local` does not require `libcom` or `diffusers`.
+When `harmonizer_backend=libcom` is requested, the command must run in an environment with the `legacy-libcom` extra, for example `uv run --extra legacy-libcom python -m cps.cli ...`.
 
 ## Expected COCO2017 layout
 
@@ -64,6 +66,57 @@ uv run python -m cps.cli make-subsets --config-name subset \
 ```
 
 Each subset directory contains `annotations.json`, optional symlinked/copied images, `metadata.json`, and distribution/sample visualizations.
+
+## Create premade offline augmentation datasets
+
+Use the same subset seed and percentage, then materialize one no-augmentation dataset plus the three copy-paste variants:
+
+```bash
+uv run python -m cps.cli make-premade-subsets --config-name subset \
+  subset.percentages='[25]' \
+  subset.seed=1337 \
+  subset.premade.target_images=all \
+  subset.premade.num_workers=0
+```
+
+To augment the same random percentage of images across all three copy-paste methods:
+
+```bash
+uv run python -m cps.cli make-premade-subsets --config-name subset \
+  subset.percentages='[25]' \
+  subset.seed=1337 \
+  subset.premade.target_images=random_percent \
+  subset.premade.random_percent=50
+```
+
+To target images that contain underrepresented classes and paste underrepresented-class donors:
+
+```bash
+uv run python -m cps.cli make-premade-subsets --config-name subset \
+  subset.percentages='[25]' \
+  subset.seed=1337 \
+  subset.premade.target_images=underrepresented \
+  subset.premade.rare_quantile=0.25
+```
+
+Premade datasets are written under each subset directory grouped by target policy, for example `premade/all_images/simple_copy_paste`, `premade/random_050pct/simple_copy_paste`, or `premade/underrepresented_q025/simple_copy_paste`. Copy-paste variants keep every original image and add one augmented copy for each image where copy-paste succeeds; set `subset.premade.append_augmented=false` to use the older replace-in-place behavior. Each variant writes before/after count, relative-frequency, and delta plots under `visualizations/`. `subset.premade.num_workers=0` uses an automatic worker count capped at 8, or one worker when `harmonizer_backend=libcom`; set it to `1` for sequential debugging or to an explicit worker count for your machine. Train from one of them with online augmentation disabled:
+
+```bash
+uv run python -m cps.cli train --config-name train \
+  subset.percent=25 \
+  subset.premade.target_images=underrepresented \
+  subset.premade.train_variant=simple_copy_paste \
+  augmentation=none
+```
+
+You can also address the folder directly:
+
+```bash
+uv run python -m cps.cli train --config-name train \
+  subset.percent=25 \
+  subset.premade.train_variant=underrepresented_q025/simple_copy_paste \
+  augmentation=none
+```
 
 ## Preview augmentations
 

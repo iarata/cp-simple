@@ -125,6 +125,23 @@ def annotation_to_instance(ann: dict[str, Any], height: int, width: int) -> dict
     }
 
 
+def mask_to_coco_segmentation(mask: np.ndarray) -> dict[str, Any] | list[Any]:
+    """Encode a boolean mask as COCO compressed RLE when pycocotools is available."""
+
+    mask_uint8 = np.asfortranarray(np.asarray(mask, dtype=np.uint8))
+    try:
+        from pycocotools import mask as mask_utils
+
+        rle = mask_utils.encode(mask_uint8)
+        counts = rle.get("counts")
+        if isinstance(counts, bytes):
+            rle["counts"] = counts.decode("ascii")
+        rle["size"] = [int(v) for v in rle["size"]]
+        return rle
+    except Exception:
+        return []
+
+
 def instances_to_annotations(
     instances: list[dict[str, Any]],
     image_id: int,
@@ -146,7 +163,7 @@ def instances_to_annotations(
                 "bbox": [float(x0), float(y0), float(x1 - x0), float(y1 - y0)],
                 "area": float(mask.sum()),
                 "iscrowd": int(inst.get("iscrowd", 0)),
-                "segmentation": [],
+                "segmentation": mask_to_coco_segmentation(mask),
             }
         )
         ann_id += 1

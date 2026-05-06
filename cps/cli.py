@@ -43,6 +43,27 @@ def make_subsets(
     logger.info("Generated {} subset(s).", len(summaries))
 
 
+@app.command("make-premade-subsets", context_settings=CONTEXT_SETTINGS)
+def make_premade_subsets(
+    ctx: typer.Context,
+    config_name: Annotated[
+        str, typer.Option("--config-name", help="Hydra config name.")
+    ] = "subset",
+) -> None:
+    """Create fixed no-augmentation and copy-paste subset variants for offline training."""
+
+    setup_logging()
+    cfg = _load(config_name, list(ctx.args))
+    from omegaconf import open_dict
+
+    with open_dict(cfg):
+        cfg.subset.premade.enabled = True
+    from cps.data.subsets import build_coco_subsets
+
+    summaries = build_coco_subsets(cfg)
+    logger.info("Generated {} subset(s) with premade variants.", len(summaries))
+
+
 @app.command("analyze-subsets", context_settings=CONTEXT_SETTINGS)
 def analyze_subsets(
     ctx: typer.Context,
