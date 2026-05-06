@@ -16,6 +16,7 @@ from loguru import logger
 from scipy import ndimage
 
 from cps.augmentations.base import CopyPasteConfig
+from cps.augmentations.libcom_backend import get_local_image_harmonization_model
 from cps.augmentations.masks import feather_alpha, mask_boundary
 from cps.augmentations.simple_copy_paste import DonorGetter, SimpleCopyPasteAugmentation
 
@@ -46,17 +47,17 @@ class LBMStyleHarmonizer:
     def _run_libcom(self, composite: np.ndarray, pasted_mask: np.ndarray) -> np.ndarray:
         try:
             if self._legacy_model is None:
-                from libcom.image_harmonization import ImageHarmonizationModel
+                ImageHarmonizationModel = get_local_image_harmonization_model()
 
                 logger.info(
-                    "Initializing libcom ImageHarmonizationModel(model_type='LBM', device={!r}, "
-                    "steps={}, resolution={})",
+                    "Initializing local cps/libcom ImageHarmonizationModel(model_type='LBM', "
+                    "device={!r}, steps={}, resolution={})",
                     self.device,
                     int(self.steps),
                     int(self.resolution),
                 )
                 self._legacy_model = ImageHarmonizationModel(device=self.device, model_type="LBM")
-                logger.info("Initialized libcom LBM harmonizer.")
+                logger.info("Initialized local cps/libcom LBM harmonizer.")
             bgr = np.asarray(composite, dtype=np.uint8)[..., ::-1]
             mask = np.asarray(pasted_mask, dtype=np.uint8) * 255
             result_bgr = self._legacy_model(
@@ -68,15 +69,15 @@ class LBMStyleHarmonizer:
             return np.asarray(result_bgr, dtype=np.uint8)[..., ::-1]
         except ImportError as exc:
             raise RuntimeError(
-                "LBM harmonizer_backend=libcom was requested, but libcom or one of its optional "
-                "dependencies is not installed. "
-                "Install the optional dependency with `uv sync --extra legacy-libcom` or run "
-                "commands with `uv run --extra legacy-libcom ...`."
+                "LBM harmonizer_backend=libcom was requested, but the local cps/libcom wrapper "
+                "or one of its dependencies could not be imported. Run `uv sync` so the local "
+                "libcom runtime dependencies are installed."
             ) from exc
         except Exception as exc:
             raise RuntimeError(
-                "LBM harmonizer_backend=libcom failed during initialization or inference. "
-                "The local fallback was not used because libcom was explicitly requested."
+                "LBM harmonizer_backend=libcom failed in the local cps/libcom wrapper during "
+                "initialization or inference. The local fallback was not used because libcom was "
+                f"explicitly requested. Cause: {exc}"
             ) from exc
 
     def _local_boundary_blend(

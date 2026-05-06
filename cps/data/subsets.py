@@ -36,6 +36,7 @@ from cps.data.visualization import (
     save_image_grid,
     save_instance_count_comparison_plot,
     save_instance_delta_plot,
+    save_long_tail_comparison_plot,
     save_long_tail_plot,
 )
 from cps.paths import project_path
@@ -210,10 +211,19 @@ def save_before_after_distribution_visualizations(
     before_dist = class_distribution(before)
     after_dist = class_distribution(after)
     paths = {
+        "long_tail": output_dir / "long_tail.png",
         "comparison_before_after_counts": output_dir / "comparison_before_after_counts.png",
         "comparison_before_after_relative": output_dir / "comparison_before_after_relative.png",
         "instance_delta_before_after": output_dir / "instance_delta_before_after.png",
     }
+    save_long_tail_comparison_plot(
+        before_dist["classes"],
+        after_dist["classes"],
+        paths["long_tail"],
+        f"{method}: before vs after augmentation long-tail distribution",
+        before_label="before augmentation",
+        after_label="after augmentation",
+    )
     save_instance_count_comparison_plot(
         before_dist["classes"],
         after_dist["classes"],

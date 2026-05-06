@@ -14,7 +14,9 @@ dependencies = [
     "accelerate>=1.13.0",
     "albumentations",
     "diffusers>=0.37.1",
+    "einops",
     "hydra-core",
+    "lpips>=0.1.4",
     "loguru",
     "matplotlib",
     "numpy",
@@ -31,11 +33,12 @@ dependencies = [
     "transformers>=5.8.0",
     "typer",
     "wandb",
+    "modelscope>=1.36.3",
 ]
 
 [project.optional-dependencies]
 dev = ["ruff>=0.8.0"]
-legacy-libcom = ["libcom>=0.1.0", "diffusers>=0.31.0", "transformers>=4.45.0", "accelerate>=1.0.0"]
+legacy-libcom = ["diffusers>=0.31.0", "einops", "lpips>=0.1.4", "modelscope", "transformers>=4.45.0", "accelerate>=1.0.0"]
 
 [project.scripts]
 cps = "cps.cli:app"
@@ -47,7 +50,7 @@ packages = ["cps"]
 target-version = "py312"
 line-length = 100
 src = ["cps"]
-extend-exclude = ["tests", "reports", "docs", "models", "notebooks", "data.nosync", ".venv.nosync", ".venv" ]
+extend-exclude = ["tests", "reports", "docs", "models", "notebooks", "data.nosync", ".venv.nosync", ".venv", "cps/libcom" ]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "C4", "SIM", "RUF"]

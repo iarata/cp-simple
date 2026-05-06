@@ -15,7 +15,7 @@ The baseline is intentionally simple: a small DETR-style instance segmenter with
 - Subsets are nested: the same deterministic image order is used for all requested percentages.
 - Copy-paste methods update masks, boxes, areas, labels, image IDs, occlusion, and tiny-mask filtering.
 - Premade copy-paste variants keep the original subset and append augmented copies by default, so the training set grows.
-- PCTNet and LBM support an optional `libcom` backend, but the default is a project-local fallback to avoid brittle legacy dependencies.
+- PCTNet and LBM support `harmonizer_backend=libcom` through the in-repository `cps/libcom` wrapper; the default remains a lightweight project-local fallback.
 - W&B is optional and disabled by default.
 - CUDA, Apple Silicon MPS, and CPU fallback are supported through `train.device=auto`.
 
@@ -27,14 +27,15 @@ uv venv --python 3.12
 uv sync --extra dev
 ```
 
-Optional legacy harmonization backend:
+Optional ModelScope download fallback for the in-repository libcom wrapper:
 
 ```bash
 uv sync --extra dev --extra legacy-libcom
 ```
 
-The default `harmonizer_backend=local` does not require `libcom` or `diffusers`.
-When `harmonizer_backend=libcom` is requested, the command must run in an environment with the `legacy-libcom` extra, for example `uv run --extra legacy-libcom python -m cps.cli ...`.
+The default `harmonizer_backend=local` does not load the in-repository `cps/libcom` wrapper.
+When `harmonizer_backend=libcom` is requested, the code imports `cps/libcom` directly rather than the stale PyPI `libcom` package.
+Downloaded libcom weights default to `data.nosync/libcom_models`; set `LIBCOM_MODEL_DIR=/path/to/models` to override that location.
 
 ## Expected COCO2017 layout
 

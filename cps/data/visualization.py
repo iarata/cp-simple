@@ -103,6 +103,51 @@ def save_long_tail_plot(rows: list[dict[str, Any]], output_path: str | Path, tit
     plt.close()
 
 
+def save_long_tail_comparison_plot(
+    before_rows: list[dict[str, Any]],
+    after_rows: list[dict[str, Any]],
+    output_path: str | Path,
+    title: str,
+    before_label: str = "before",
+    after_label: str = "after",
+) -> None:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    before_counts = sorted(
+        [int(row["instances"]) for row in before_rows if int(row["instances"]) > 0],
+        reverse=True,
+    )
+    after_counts = sorted(
+        [int(row["instances"]) for row in after_rows if int(row["instances"]) > 0],
+        reverse=True,
+    )
+    plt.figure(figsize=(8, 5))
+    if before_counts:
+        plt.plot(
+            range(1, len(before_counts) + 1),
+            before_counts,
+            marker="o",
+            linewidth=1,
+            label=before_label,
+        )
+    if after_counts:
+        plt.plot(
+            range(1, len(after_counts) + 1),
+            after_counts,
+            marker="o",
+            linewidth=1,
+            label=after_label,
+        )
+    plt.yscale("log")
+    plt.xlabel("Class rank")
+    plt.ylabel("Instances, log scale")
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=180)
+    plt.close()
+
+
 def save_distribution_comparison_plot(
     full_rows: list[dict[str, Any]],
     subset_rows: list[dict[str, Any]],
