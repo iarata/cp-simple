@@ -6,6 +6,7 @@ import json
 import math
 import os
 import shutil
+import subprocess
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from copy import deepcopy
@@ -338,8 +339,90 @@ def _premade_num_workers(premade_cfg: Any, method_cfg: dict[str, Any] | None = N
     if configured > 0:
         return configured
     if method_cfg and str(method_cfg.get("harmonizer_backend", "local")) == "libcom":
+        if str(method_cfg.get("name", "")) == "lbm_copy_paste":
+            return _premade_lbm_libcom_auto_workers(premade_cfg)
         return 1
     return max(1, min(os.cpu_count() or 1, 8))
+
+
+def _premade_lbm_libcom_auto_workers(premade_cfg: Any) -> int:
+    device = str(cfg_get(premade_cfg, "device", "cpu"))
+    if not _is_cuda_device(device):
+        return 1
+
+    max_workers = max(1, int(cfg_get(premade_cfg, "lbm_auto_max_workers", 3) or 1))
+    worker_vram_gb = max(1.0, float(cfg_get(premade_cfg, "lbm_worker_vram_gb", 9.0) or 9.0))
+    reserve_gb = max(0.0, float(cfg_get(premade_cfg, "lbm_vram_reserve_gb", 4.0) or 4.0))
+    total_vram_gb = _cuda_total_vram_gb(device)
+    if total_vram_gb is None:
+        logger.warning(
+            "Could not detect CUDA VRAM for LBM premade auto workers; using 1 worker. "
+            "Set subset.premade.num_workers explicitly to override."
+        )
+        return 1
+
+    vram_workers = int(max(1.0, math.floor((total_vram_gb - reserve_gb) / worker_vram_gb)))
+    cpu_workers = max(1, os.cpu_count() or 1)
+    workers = max(1, min(max_workers, vram_workers, cpu_workers))
+    logger.info(
+        "Auto-selected {} LBM libcom worker(s) for {:.1f} GiB CUDA VRAM "
+        "({:.1f} GiB/worker, {:.1f} GiB reserve, max {}).",
+        workers,
+        total_vram_gb,
+        worker_vram_gb,
+        reserve_gb,
+        max_workers,
+    )
+    return workers
+
+
+def _is_cuda_device(device: str) -> bool:
+    value = str(device).lower()
+    return value == "cuda" or value.startswith("cuda:") or value.isdigit()
+
+
+def _cuda_total_vram_gb(device: str) -> float | None:
+    selector = _nvidia_smi_device_selector(device)
+    cmd = ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"]
+    if selector is not None:
+        cmd.extend(["-i", selector])
+    try:
+        output = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=5)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            return float(stripped.split()[0]) / 1024.0
+        except ValueError:
+            return None
+    return None
+
+
+def _nvidia_smi_device_selector(device: str) -> str | None:
+    value = str(device).lower()
+    if value == "cuda":
+        cuda_index = 0
+    elif value.startswith("cuda:"):
+        _, _, suffix = value.partition(":")
+        if not suffix:
+            cuda_index = 0
+        elif suffix.isdigit():
+            cuda_index = int(suffix)
+        else:
+            return suffix
+    elif value.isdigit():
+        cuda_index = int(value)
+    else:
+        return None
+
+    visible_devices = [item.strip() for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")]
+    visible_devices = [item for item in visible_devices if item]
+    if visible_devices and cuda_index < len(visible_devices):
+        return visible_devices[cuda_index]
+    return str(cuda_index)
 
 
 def _premade_worker_chunksize(premade_cfg: Any) -> int:

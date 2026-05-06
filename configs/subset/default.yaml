@@ -14,6 +14,9 @@ premade:
   overwrite: true
   num_workers: 0 # 0 auto, 1 disables parallel processing
   worker_chunksize: 16
+  lbm_auto_max_workers: 3 # CUDA libcom LBM auto cap; each worker loads one LBM model copy
+  lbm_worker_vram_gb: 9.0 # estimated VRAM per LBM libcom worker at 1024 resolution
+  lbm_vram_reserve_gb: 4.0 # leave room for CUDA context, allocator overhead, and display/MIG variance
   image_mode: symlink # unchanged images are symlinked or copied into each premade dataset
   append_augmented: true # keep original subset images and add augmented copies as new COCO images
   target_images: all # all, random_percent, underrepresented
