@@ -6,6 +6,10 @@ run_name: ""
 epochs: 12
 batch_size: 12
 num_workers: 8
+prefetch_factor: 1
+pin_memory: null # null enables pinning whenever CUDA is available
+persistent_workers: false
+multiprocessing_sharing_strategy: file_system # avoids DataLoader FD exhaustion on large batches
 num_threads: 0 # 0 keeps PyTorch default
 num_interop_threads: 0
 lr: 0.0001

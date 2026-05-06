@@ -25,6 +25,27 @@ from cps.utils.seed import seed_everything
 from cps.utils.wandb import init_wandb, log_artifact, log_validation_outputs
 
 
+def configure_torch_multiprocessing(cfg: Any) -> None:
+    """Configure multiprocessing before DataLoader workers are created."""
+
+    strategy = str(
+        getattr(cfg.train, "multiprocessing_sharing_strategy", "file_system") or ""
+    ).strip()
+    if not strategy or strategy.lower() in {"default", "none"}:
+        return
+    available = torch.multiprocessing.get_all_sharing_strategies()
+    if strategy not in available:
+        raise ValueError(
+            f"Unsupported train.multiprocessing_sharing_strategy={strategy!r}. "
+            f"Available strategies: {sorted(available)}"
+        )
+    if torch.multiprocessing.get_sharing_strategy() != strategy:
+        torch.multiprocessing.set_sharing_strategy(strategy)
+    logger.info(
+        "Torch multiprocessing sharing strategy: {}", torch.multiprocessing.get_sharing_strategy()
+    )
+
+
 def configure_torch_threads(cfg: Any) -> None:
     """Optionally cap CPU thread pools for reproducible smoke tests and small machines."""
 
@@ -36,6 +57,41 @@ def configure_torch_threads(cfg: Any) -> None:
         # PyTorch only allows this before parallel work starts in a process.
         with suppress(RuntimeError):
             torch.set_num_interop_threads(num_interop_threads)
+
+
+def _pin_memory_enabled(cfg: Any) -> bool:
+    configured = getattr(cfg.train, "pin_memory", None)
+    if configured is None:
+        return torch.cuda.is_available()
+    return bool(configured)
+
+
+def _num_workers(cfg: Any, split: str) -> int:
+    configured = getattr(cfg.eval, "num_workers", None) if split == "val" else None
+    if configured is None:
+        configured = cfg.train.num_workers
+    num_workers = int(configured)
+    if num_workers < 0:
+        raise ValueError(f"{split} num_workers must be >= 0.")
+    return num_workers
+
+
+def _dataloader_kwargs(cfg: Any, split: str, *, shuffle: bool) -> dict[str, Any]:
+    num_workers = _num_workers(cfg, split)
+    kwargs: dict[str, Any] = {
+        "batch_size": int(cfg.eval.batch_size) if split == "val" else int(cfg.train.batch_size),
+        "shuffle": shuffle,
+        "num_workers": num_workers,
+        "collate_fn": collate_fn,
+        "pin_memory": _pin_memory_enabled(cfg),
+    }
+    if num_workers > 0:
+        prefetch_factor = int(getattr(cfg.train, "prefetch_factor", 1) or 1)
+        if prefetch_factor < 1:
+            raise ValueError("train.prefetch_factor must be >= 1 when num_workers > 0.")
+        kwargs["prefetch_factor"] = prefetch_factor
+        kwargs["persistent_workers"] = bool(getattr(cfg.train, "persistent_workers", False))
+    return kwargs
 
 
 def resolve_train_paths(cfg: Any) -> tuple[Path, Path]:
@@ -99,26 +155,24 @@ def build_datasets(cfg: Any) -> tuple[COCODataset, COCODataset]:
 
 def build_dataloaders(cfg: Any) -> tuple[DataLoader, DataLoader, COCODataset, COCODataset]:
     train_dataset, val_dataset = build_datasets(cfg)
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=int(cfg.train.batch_size),
-        shuffle=True,
-        num_workers=int(cfg.train.num_workers),
-        collate_fn=collate_fn,
-        pin_memory=torch.cuda.is_available(),
+    train_kwargs = _dataloader_kwargs(cfg, "train", shuffle=True)
+    val_kwargs = _dataloader_kwargs(cfg, "val", shuffle=False)
+    logger.info(
+        "DataLoader settings - train workers: {}, val workers: {}, prefetch: {}, "
+        "persistent: {}, pin_memory: {}",
+        train_kwargs["num_workers"],
+        val_kwargs["num_workers"],
+        train_kwargs.get("prefetch_factor", "n/a"),
+        train_kwargs.get("persistent_workers", False),
+        train_kwargs["pin_memory"],
     )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=int(cfg.eval.batch_size),
-        shuffle=False,
-        num_workers=int(cfg.train.num_workers),
-        collate_fn=collate_fn,
-        pin_memory=torch.cuda.is_available(),
-    )
+    train_loader = DataLoader(train_dataset, **train_kwargs)
+    val_loader = DataLoader(val_dataset, **val_kwargs)
     return train_loader, val_loader, train_dataset, val_dataset
 
 
 def run_training(cfg: Any) -> dict[str, Any]:
+    configure_torch_multiprocessing(cfg)
     configure_torch_threads(cfg)
     seed_everything(int(cfg.train.seed), deterministic=bool(cfg.train.deterministic))
     info = device_info(str(cfg.train.device))
@@ -276,6 +330,7 @@ def experiment_output_dir(cfg: Any) -> Path:
 
 
 def run_evaluation(cfg: Any) -> dict[str, Any]:
+    configure_torch_multiprocessing(cfg)
     configure_torch_threads(cfg)
     seed_everything(int(cfg.train.seed), deterministic=bool(cfg.train.deterministic))
     device = get_device(str(cfg.train.device))
@@ -289,11 +344,7 @@ def run_evaluation(cfg: Any) -> dict[str, Any]:
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=int(cfg.eval.batch_size),
-        shuffle=False,
-        num_workers=int(cfg.train.num_workers),
-        collate_fn=collate_fn,
-        pin_memory=torch.cuda.is_available(),
+        **_dataloader_kwargs(cfg, "val", shuffle=False),
     )
     model, criterion = build_model_and_criterion(cfg.model, num_classes=val_dataset.num_classes)
     model.to(device)

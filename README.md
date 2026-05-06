@@ -149,6 +149,13 @@ uv run python -m cps.cli train --config-name train augmentation=lbm_copy_paste s
 
 Checkpoints and config snapshots are saved under `models/runs/<method>_<subset>_seed_<seed>/` by default.
 
+Large server runs with many workers and large batches use
+`train.multiprocessing_sharing_strategy=file_system` by default to avoid PyTorch
+DataLoader shared-memory file descriptor exhaustion. If a server still reports
+`Too many open files`, raise the shell limit before launching training, for
+example `ulimit -n 65535`, or reduce the number of queued batches with
+`train.num_workers`, `train.prefetch_factor`, or `eval.num_workers` overrides.
+
 ## Evaluate a checkpoint
 
 ```bash

@@ -1,6 +1,7 @@
 checkpoint: null
 output_dir: data.nosync/processed/evaluation
 batch_size: 2
+num_workers: null # null reuses train.num_workers
 score_threshold: 0.05
 max_detections: 100
 max_batches: null
