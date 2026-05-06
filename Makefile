@@ -27,8 +27,20 @@ format-check:
 data:
 	$(UV) run python -m cps.cli create-tiny-fixture --output-dir data/interim/tiny_coco
 
-make-subsets:
-	$(UV) run python -m cps.cli make-subsets --config-name subset
+.PHONY: download-coco
+download-coco:
+		@test -n "$(OUTPUT)" || (echo "OUTPUT is required. Usage: make download-coco-aria2 OUTPUT=/path/to/file.zip" >&2; exit 2)
+		aria2c \
+			--max-connection-per-server=16 \
+			--split=16 \
+			--min-split-size=1M \
+			--continue \
+			--console-log-level=error \
+			-o $(OUTPUT) \
+			https://www.kaggle.com/api/v1/datasets/download/awsaf49/coco-2017-dataset
+
+make-all-subsets:
+	$(UV) run python -m cps.cli make-premade-subsets --config-name subset subset.percentages='[25]' subset.seed=1337 subset.premade.num_workers=0 subset.premade.target_images=underrepresented subset.premade.methods='[none,simple_copy_paste,pctnet_copy_paste,lbm_copy_paste]' subset.premade.image_mode=copy subset.premade.copy_paste.harmonizer_backend=libcom
 
 make-premade-subsets:
 	$(UV) run python -m cps.cli make-premade-subsets --config-name subset
