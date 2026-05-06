@@ -4,6 +4,8 @@ data.nosync
 .venv.nosync
 .venv
 *.pth
+*.pt
+models/runs
 
 
 # Mac OS-specific storage files

@@ -119,6 +119,17 @@ uv run python -m cps.cli train --config-name train \
   augmentation=none
 ```
 
+Full training configs for the 25% premade datasets are available under `configs/train_premade`:
+
+```bash
+uv run python -m cps.cli train --config-name train_premade/none_online_normal
+uv run python -m cps.cli train --config-name train_premade/simple_copy_paste
+uv run python -m cps.cli train --config-name train_premade/pctnet_copy_paste
+uv run python -m cps.cli train --config-name train_premade/lbm_copy_paste
+```
+
+The `none_online_normal` config trains from `premade/underrepresented_q025/none` and applies online normal Albumentations. The copy-paste configs train directly from the premade augmented datasets with `augmentation=none`.
+
 ## Preview augmentations
 
 ```bash
@@ -188,7 +199,13 @@ uv run python -m cps.cli train --config-name train \
   wandb.enabled=true wandb.project=cps-copy-paste wandb.mode=online
 ```
 
-Use `wandb.mode=offline` for air-gapped runs.
+Training logs every configured train step's loss components (`train/loss_ce`,
+`train/loss_bbox`, `train/loss_giou`, `train/loss_mask`, `train/loss_dice`,
+and total `train/loss`), validation loss components, segmentation and bbox COCO
+metrics including `val/bbox_mAP`, W&B COCO summary/per-class AP plots, and saved
+validation PNGs such as GT-vs-pred grids and attention maps. Use
+`wandb.mode=offline` for air-gapped runs. Set `wandb.max_visualizations=0` to
+skip image uploads.
 
 ## Shortcut-learning analysis
 

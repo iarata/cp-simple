@@ -1,0 +1,25 @@
+# @package _global_
+
+defaults:
+  - /train_config
+  - override /augmentation: normal
+  - _self_
+
+subset:
+  percent: 25
+  seed: 1337
+  premade:
+    train_variant: underrepresented_q025/none
+
+augmentation:
+  use_albumentations: true
+  horizontal_flip_p: 0.5
+  brightness_limit: 0.2
+  contrast_limit: 0.2
+
+train:
+  run_name: premade_none_online_normal_pct_025_seed_1337
+
+wandb:
+  group: premade_pct_025_seed_1337
+  tags: [premade, none, online-normal, pct-025]

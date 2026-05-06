@@ -1,0 +1,19 @@
+# @package _global_
+
+defaults:
+  - /train_config
+  - override /augmentation: none
+  - _self_
+
+subset:
+  percent: 25
+  seed: 1337
+  premade:
+    train_variant: underrepresented_q025/simple_copy_paste
+
+train:
+  run_name: premade_simple_copy_paste_pct_025_seed_1337
+
+wandb:
+  group: premade_pct_025_seed_1337
+  tags: [premade, simple-copy-paste, pct-025]

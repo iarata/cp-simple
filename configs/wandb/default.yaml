@@ -5,3 +5,6 @@ group: null
 mode: online
 tags: []
 log_checkpoints: false
+log_plots: true
+log_per_class_ap: true
+max_visualizations: 16

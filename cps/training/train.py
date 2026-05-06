@@ -22,7 +22,7 @@ from cps.training.checkpoints import load_checkpoint, save_checkpoint
 from cps.training.validate import move_targets_to_device, validation_loop
 from cps.utils.device import device_info, get_device
 from cps.utils.seed import seed_everything
-from cps.utils.wandb import init_wandb, log_artifact
+from cps.utils.wandb import init_wandb, log_artifact, log_validation_outputs
 
 
 def configure_torch_threads(cfg: Any) -> None:
@@ -179,8 +179,15 @@ def run_training(cfg: Any) -> dict[str, Any]:
             )
             metrics["val"] = val_metrics
             segm_map = float(val_metrics.get("segm", {}).get("mAP", 0.0))
-            if run:
-                run.log({"val/segm_mAP": segm_map, "epoch": epoch})
+            log_validation_outputs(
+                run,
+                val_metrics,
+                val_dir,
+                epoch=epoch,
+                max_visualizations=int(getattr(cfg.wandb, "max_visualizations", 16)),
+                log_plots=bool(getattr(cfg.wandb, "log_plots", True)),
+                log_per_class_ap=bool(getattr(cfg.wandb, "log_per_class_ap", True)),
+            )
             if segm_map > best_map:
                 best_map = segm_map
                 best_path = save_checkpoint(
@@ -230,14 +237,14 @@ def train_one_epoch(
         progress.set_postfix(loss=float(loss.detach().cpu()))
         global_step = epoch * len(data_loader) + step
         if run and step % int(cfg.train.log_every) == 0:
-            run.log(
-                {
-                    "train/loss": float(loss.detach().cpu()),
-                    "train/lr": optimizer.param_groups[0]["lr"],
-                    "epoch": epoch,
-                    "step": global_step,
-                }
-            )
+            payload = {
+                "train/lr": optimizer.param_groups[0]["lr"],
+                "epoch": epoch,
+                "step": global_step,
+            }
+            for key, value in losses.items():
+                payload[f"train/{key}"] = float(value.detach().cpu())
+            run.log(payload)
         max_batches = getattr(cfg.train, "max_train_batches", None)
         if max_batches is not None and step + 1 >= int(max_batches):
             break
@@ -265,6 +272,7 @@ def run_evaluation(cfg: Any) -> dict[str, Any]:
     configure_torch_threads(cfg)
     seed_everything(int(cfg.train.seed), deterministic=bool(cfg.train.deterministic))
     device = get_device(str(cfg.train.device))
+    run = init_wandb(cfg, job_type="eval")
     val_dataset = COCODataset(
         image_dir=cfg.dataset.val_images,
         annotation_json=cfg.dataset.val_annotations,
@@ -288,7 +296,7 @@ def run_evaluation(cfg: Any) -> dict[str, Any]:
         raise ValueError("Evaluation requires eval.checkpoint=... or checkpoint=...")
     load_checkpoint(checkpoint, model, optimizer=None, map_location=device)
     output_dir = project_path(cfg.eval.output_dir)
-    return validation_loop(
+    metrics = validation_loop(
         model=model,
         criterion=criterion,
         dataloader=val_loader,
@@ -303,3 +311,14 @@ def run_evaluation(cfg: Any) -> dict[str, Any]:
         visualize_batches=int(cfg.eval.visualize_batches),
         attention_samples=int(cfg.analysis.attention_samples),
     )
+    log_validation_outputs(
+        run,
+        metrics,
+        output_dir,
+        max_visualizations=int(getattr(cfg.wandb, "max_visualizations", 16)),
+        log_plots=bool(getattr(cfg.wandb, "log_plots", True)),
+        log_per_class_ap=bool(getattr(cfg.wandb, "log_per_class_ap", True)),
+    )
+    if run:
+        run.finish()
+    return metrics

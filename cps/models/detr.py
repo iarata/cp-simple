@@ -456,17 +456,18 @@ class DETRCriterion(nn.Module):
         for batch_idx, (src_idx, tgt_idx) in enumerate(indices):
             if src_idx.numel() == 0:
                 continue
-            pred_masks_list.append(outputs["pred_masks"][batch_idx, src_idx])
+            pred_masks = outputs["pred_masks"][batch_idx, src_idx]
             tgt_masks = targets[batch_idx]["masks"].to(outputs["pred_masks"].device)[tgt_idx]
+            pred_masks, tgt_masks = resize_masks_for_loss(
+                pred_masks, tgt_masks, max_size=self.config.mask_loss_size
+            )
+            pred_masks_list.append(pred_masks)
             tgt_masks_list.append(tgt_masks)
         if not pred_masks_list:
             zero = outputs["pred_masks"].sum() * 0.0
             return {"loss_mask": zero, "loss_dice": zero}
         pred_masks = torch.cat(pred_masks_list, dim=0)
         tgt_masks = torch.cat(tgt_masks_list, dim=0)
-        pred_masks, tgt_masks = resize_masks_for_loss(
-            pred_masks, tgt_masks, max_size=self.config.mask_loss_size
-        )
         loss_mask = F.binary_cross_entropy_with_logits(pred_masks, tgt_masks, reduction="mean")
         loss_dice = dice_loss(pred_masks.sigmoid(), tgt_masks, num_boxes)
         return {"loss_mask": loss_mask, "loss_dice": loss_dice}
