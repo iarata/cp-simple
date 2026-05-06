@@ -124,6 +124,13 @@ def run_training(cfg: Any) -> dict[str, Any]:
     info = device_info(str(cfg.train.device))
     device = get_device(str(cfg.train.device))
     logger.info("Using device: {} ({})", info.selected, info.name)
+    logger.info(
+        "Dataset {} - Batch size: {}, Epochs: {}, Eval every: {}",
+        cfg.dataset.name,
+        cfg.train.batch_size,
+        cfg.train.epochs,
+        cfg.train.eval_every,
+    )
     run = init_wandb(cfg, job_type="train")
     train_loader, val_loader, train_dataset, val_dataset = build_dataloaders(cfg)
     model, criterion = build_model_and_criterion(cfg.model, num_classes=train_dataset.num_classes)
