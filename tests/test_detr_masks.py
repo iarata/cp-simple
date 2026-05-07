@@ -24,6 +24,27 @@ class DETRMaskMemoryTest(unittest.TestCase):
             outputs = model(images)
 
         self.assertEqual(tuple(outputs["pred_masks"].shape), (2, 3, 4, 5))
+        self.assertNotIn("cross_attention", outputs)
+        self.assertIsNone(model.decoder_layers[-1].last_cross_attention)
+
+    def test_forward_stores_attention_only_when_requested(self) -> None:
+        config = ModelConfig(
+            hidden_dim=16,
+            num_queries=3,
+            num_encoder_layers=1,
+            num_decoder_layers=1,
+            nheads=4,
+            dim_feedforward=32,
+        )
+        model = TinyDETRSegmenter(num_classes=2, config=config)
+        model.eval()
+        images = [torch.rand(3, 64, 80)]
+
+        with torch.no_grad():
+            outputs = model(images, return_attention=True)
+
+        self.assertIn("cross_attention", outputs)
+        self.assertEqual(outputs["cross_attention"].shape[:3], (1, 4, 3))
 
     def test_outputs_to_predictions_upsamples_selected_masks(self) -> None:
         outputs = {
@@ -56,6 +77,29 @@ class DETRMaskMemoryTest(unittest.TestCase):
         self.assertEqual(len(predictions), 1)
         self.assertEqual(predictions[0]["category_id"], 10)
         self.assertEqual(predictions[0]["mask"].shape, (8, 12))
+
+    def test_outputs_to_predictions_can_skip_masks_for_bbox_only_eval(self) -> None:
+        outputs = {
+            "pred_logits": torch.tensor([[[0.0, 7.0, 0.0]]]),
+            "pred_boxes": torch.tensor([[[0.5, 0.5, 1.0, 1.0]]]),
+            "pred_masks": torch.tensor([[[[10.0, -10.0], [-10.0, 10.0]]]]),
+        }
+        targets = [
+            {
+                "orig_size": torch.tensor([8, 12]),
+                "image_id": torch.tensor([123]),
+            }
+        ]
+
+        predictions = outputs_to_predictions(
+            outputs,
+            targets,
+            label_to_cat_id={1: 10},
+            include_masks=False,
+        )
+
+        self.assertEqual(len(predictions), 1)
+        self.assertNotIn("mask", predictions[0])
 
 
 if __name__ == "__main__":

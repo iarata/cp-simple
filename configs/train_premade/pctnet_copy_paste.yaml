@@ -14,6 +14,10 @@ subset:
 train:
   run_name: premade_pctnet_copy_paste_pct_025_seed_1337
 
+eval:
+  mode: gpu_loss
+  visualize_batches: 0
+
 wandb:
   group: premade_pct_025_seed_1337
   tags: [premade, pctnet-copy-paste, pct-025]

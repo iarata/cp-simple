@@ -171,6 +171,17 @@ def build_dataloaders(cfg: Any) -> tuple[DataLoader, DataLoader, COCODataset, CO
     return train_loader, val_loader, train_dataset, val_dataset
 
 
+def validation_checkpoint_score(metrics: dict[str, Any]) -> float:
+    for iou_type in ("segm", "bbox"):
+        value = metrics.get(iou_type, {}).get("mAP")
+        if value is not None:
+            return float(value)
+    loss = metrics.get("losses", {}).get("loss")
+    if loss is not None:
+        return -float(loss)
+    return 0.0
+
+
 def run_training(cfg: Any) -> dict[str, Any]:
     configure_torch_multiprocessing(cfg)
     configure_torch_threads(cfg)
@@ -204,7 +215,7 @@ def run_training(cfg: Any) -> dict[str, Any]:
     with (output_dir / "config.json").open("w", encoding="utf-8") as f:
         json.dump(OmegaConf.to_container(cfg, resolve=True), f, indent=2)
     metrics: dict[str, Any] = {}
-    best_map = -1.0
+    best_score = float("-inf")
     for epoch in range(start_epoch, int(cfg.train.epochs)):
         train_dataset.set_epoch(epoch)
         train_metrics = train_one_epoch(
@@ -236,10 +247,18 @@ def run_training(cfg: Any) -> dict[str, Any]:
                 max_detections=int(cfg.eval.max_detections),
                 max_batches=getattr(cfg.eval, "max_batches", None),
                 visualize_batches=int(cfg.eval.visualize_batches),
+                visualize_max_images=int(getattr(cfg.eval, "visualize_max_images", 4)),
                 attention_samples=int(cfg.analysis.attention_samples),
+                forward_batch_size=getattr(cfg.eval, "forward_batch_size", None),
+                mode=str(getattr(cfg.eval, "mode", "full")),
+                iou_types=tuple(getattr(cfg.eval, "iou_types", ("segm", "bbox"))),
+                empty_cache=bool(getattr(cfg.eval, "empty_cache", True)),
+                empty_cache_between_chunks=bool(
+                    getattr(cfg.eval, "empty_cache_between_chunks", False)
+                ),
             )
             metrics["val"] = val_metrics
-            segm_map = float(val_metrics.get("segm", {}).get("mAP", 0.0))
+            val_score = validation_checkpoint_score(val_metrics)
             log_validation_outputs(
                 run,
                 val_metrics,
@@ -249,8 +268,8 @@ def run_training(cfg: Any) -> dict[str, Any]:
                 log_plots=bool(getattr(cfg.wandb, "log_plots", True)),
                 log_per_class_ap=bool(getattr(cfg.wandb, "log_per_class_ap", True)),
             )
-            if segm_map > best_map:
-                best_map = segm_map
+            if val_score > best_score:
+                best_score = val_score
                 best_path = save_checkpoint(
                     output_dir / "checkpoint_best.pt", model, optimizer, epoch, cfg, metrics
                 )
@@ -367,7 +386,13 @@ def run_evaluation(cfg: Any) -> dict[str, Any]:
         max_detections=int(cfg.eval.max_detections),
         max_batches=getattr(cfg.eval, "max_batches", None),
         visualize_batches=int(cfg.eval.visualize_batches),
+        visualize_max_images=int(getattr(cfg.eval, "visualize_max_images", 4)),
         attention_samples=int(cfg.analysis.attention_samples),
+        forward_batch_size=getattr(cfg.eval, "forward_batch_size", None),
+        mode=str(getattr(cfg.eval, "mode", "full")),
+        iou_types=tuple(getattr(cfg.eval, "iou_types", ("segm", "bbox"))),
+        empty_cache=bool(getattr(cfg.eval, "empty_cache", True)),
+        empty_cache_between_chunks=bool(getattr(cfg.eval, "empty_cache_between_chunks", False)),
     )
     log_validation_outputs(
         run,

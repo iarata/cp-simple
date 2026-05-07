@@ -155,6 +155,17 @@ DataLoader shared-memory file descriptor exhaustion. If a server still reports
 `Too many open files`, raise the shell limit before launching training, for
 example `ulimit -n 65535`, or reduce the number of queued batches with
 `train.num_workers`, `train.prefetch_factor`, or `eval.num_workers` overrides.
+Validation also uses `eval.forward_batch_size=16` by default, so large
+`eval.batch_size` values can improve loading throughput without forcing one
+large CUDA validation forward/export step.
+The premade training configs use `eval.mode=gpu_loss` for GPU-resident
+training-time validation with a greedy query/target assignment proxy. Use
+`eval.mode=bbox` to run bbox COCO metrics while skipping segmentation mask
+export/RLE work, or `eval.mode=loss` for exact DETR validation loss with the
+CPU Hungarian matcher. Run a standalone `evaluate` with `eval.mode=full` for
+final COCO segmentation metrics. Validation clears unused CUDA cache by default
+after each validation pass; set `eval.empty_cache_between_chunks=true` for more
+aggressive cleanup on tight VRAM budgets.
 
 ## Evaluate a checkpoint
 

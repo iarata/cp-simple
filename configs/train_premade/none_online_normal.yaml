@@ -20,6 +20,10 @@ augmentation:
 train:
   run_name: premade_none_online_normal_pct_025_seed_1337
 
+eval:
+  mode: gpu_loss
+  visualize_batches: 0
+
 wandb:
   group: premade_pct_025_seed_1337
   tags: [premade, none, online-normal, pct-025]

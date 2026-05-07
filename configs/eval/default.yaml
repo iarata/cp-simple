@@ -2,8 +2,14 @@ checkpoint: null
 output_dir: data.nosync/processed/evaluation
 batch_size: 2
 num_workers: null # null reuses train.num_workers
+forward_batch_size: 16 # GPU microbatch size for validation forward/prediction export
+mode: full # full, bbox, loss, or gpu_loss
+iou_types: [segm, bbox]
+empty_cache: true
+empty_cache_between_chunks: false
 score_threshold: 0.05
 max_detections: 100
 max_batches: null
 max_images: null
 visualize_batches: 2
+visualize_max_images: 4

@@ -166,6 +166,7 @@ class DecoderLayer(nn.Module):
         tgt: torch.Tensor,
         memory: torch.Tensor,
         memory_key_padding_mask: torch.Tensor | None = None,
+        store_attention: bool = False,
     ) -> torch.Tensor:
         tgt2, _ = self.self_attn(tgt, tgt, tgt, need_weights=False)
         tgt = self.norm1(tgt + self.dropout1(tgt2))
@@ -174,10 +175,10 @@ class DecoderLayer(nn.Module):
             memory,
             memory,
             key_padding_mask=memory_key_padding_mask,
-            need_weights=True,
+            need_weights=store_attention,
             average_attn_weights=False,
         )
-        self.last_cross_attention = attn.detach()
+        self.last_cross_attention = attn.detach() if store_attention and attn is not None else None
         tgt = self.norm2(tgt + self.dropout2(tgt2))
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
         tgt = self.norm3(tgt + self.dropout3(tgt2))
@@ -226,8 +227,14 @@ class TinyDETRSegmenter(nn.Module):
         memory = self.encoder(memory + pos_flat, src_key_padding_mask=mask_flat)
         queries = self.query_embed.weight.unsqueeze(0).repeat(src.shape[0], 1, 1)
         hs = queries
-        for layer in self.decoder_layers:
-            hs = layer(hs, memory, memory_key_padding_mask=mask_flat)
+        last_layer_idx = len(self.decoder_layers) - 1
+        for layer_idx, layer in enumerate(self.decoder_layers):
+            hs = layer(
+                hs,
+                memory,
+                memory_key_padding_mask=mask_flat,
+                store_attention=return_attention and layer_idx == last_layer_idx,
+            )
         logits = self.class_embed(hs)
         boxes = self.bbox_embed(hs).sigmoid()
         mask_features = self.mask_feature_proj(features)
@@ -521,12 +528,13 @@ def outputs_to_predictions(
     score_threshold: float = 0.05,
     max_detections: int = 100,
     mask_threshold: float = 0.5,
+    include_masks: bool = True,
 ) -> list[dict[str, Any]]:
     prob = outputs["pred_logits"].softmax(-1)
     scores, labels = prob[..., 1:].max(-1)
     labels = labels + 1
     boxes = box_cxcywh_to_xyxy(outputs["pred_boxes"])
-    masks = outputs["pred_masks"].sigmoid()
+    masks = outputs["pred_masks"].sigmoid() if include_masks else None
     predictions: list[dict[str, Any]] = []
     for batch_idx, target in enumerate(targets):
         height, width = [int(v) for v in target["orig_size"].tolist()]
@@ -537,16 +545,12 @@ def outputs_to_predictions(
         kept_scores = scores[batch_idx][keep]
         kept_labels = labels[batch_idx][keep]
         kept_boxes = boxes[batch_idx][keep]
-        kept_masks = masks[batch_idx][keep]
+        kept_masks = masks[batch_idx][keep] if masks is not None else None
         order = torch.argsort(kept_scores, descending=True)[:max_detections]
         ordered_scores = kept_scores[order]
         ordered_labels = kept_labels[order]
         ordered_boxes = kept_boxes[order]
-        ordered_masks = kept_masks[order]
-        if ordered_masks.shape[-2:] != (height, width):
-            ordered_masks = F.interpolate(
-                ordered_masks[:, None], size=(height, width), mode="bilinear", align_corners=False
-            )[:, 0]
+        ordered_masks = kept_masks[order].detach().cpu() if kept_masks is not None else None
         for idx in range(int(order.numel())):
             label = int(ordered_labels[idx].item())
             cat_id = int(label_to_cat_id.get(label, label))
@@ -555,14 +559,21 @@ def outputs_to_predictions(
             box = (box * scale).clamp(min=0)
             box[0::2] = box[0::2].clamp(max=width)
             box[1::2] = box[1::2].clamp(max=height)
-            mask = ordered_masks[idx] >= mask_threshold
-            predictions.append(
-                {
-                    "image_id": image_id,
-                    "category_id": cat_id,
-                    "score": float(ordered_scores[idx].item()),
-                    "bbox_xyxy": [float(v) for v in box.detach().cpu().tolist()],
-                    "mask": mask.detach().cpu().numpy().astype(bool),
-                }
-            )
+            pred = {
+                "image_id": image_id,
+                "category_id": cat_id,
+                "score": float(ordered_scores[idx].item()),
+                "bbox_xyxy": [float(v) for v in box.detach().cpu().tolist()],
+            }
+            if ordered_masks is not None:
+                mask_prob = ordered_masks[idx]
+                if tuple(mask_prob.shape[-2:]) != (height, width):
+                    mask_prob = F.interpolate(
+                        mask_prob[None, None],
+                        size=(height, width),
+                        mode="bilinear",
+                        align_corners=False,
+                    )[0, 0]
+                pred["mask"] = (mask_prob >= mask_threshold).detach().cpu().numpy().astype(bool)
+            predictions.append(pred)
     return predictions
