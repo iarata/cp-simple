@@ -7,8 +7,12 @@ from unittest.mock import patch
 
 import numpy as np
 import torch
-
-from cps.training.fast_eval import ProbeSet, build_probe_set, run_fast_validation
+from cps.training.fast_eval import (
+    ProbeSet,
+    _attention_overlay,
+    build_probe_set,
+    run_fast_validation,
+)
 
 
 def _sample(image_id: int, category_id: int) -> dict:
@@ -175,11 +179,30 @@ class FastEvalTest(unittest.TestCase):
         self.assertEqual(len(payload["fast_eval/pred"]), 1)
         self.assertEqual(len(payload["fast_eval/attention"]), 1)
         table = payload["fast_eval/samples"]
-        self.assertEqual(table.columns[0:5], ["epoch", "sample_index", "image_id", "probe_type", "copy_paste_applied"])
+        self.assertEqual(
+            table.columns[0:5],
+            ["epoch", "sample_index", "image_id", "probe_type", "copy_paste_applied"],
+        )
         self.assertEqual(table.data[0][0:5], [4, 0, 123, "normal", False])
         self.assertIsInstance(table.data[0][5], FakeImage)
         self.assertIsInstance(table.data[0][6], FakeImage)
         self.assertIsInstance(table.data[0][7], FakeImage)
+        self.assertIsNot(table.data[0][5], payload["fast_eval/gt"][0])
+        self.assertIsNot(table.data[0][6], payload["fast_eval/pred"][0])
+        self.assertIsNot(table.data[0][7], payload["fast_eval/attention"][0])
+
+    def test_attention_overlay_makes_high_attention_region_prominent(self) -> None:
+        image = torch.full((3, 8, 8), 0.5)
+        attention = np.zeros((2, 2), dtype=np.float32)
+        attention[1, 1] = 1.0
+
+        overlay = _attention_overlay(image, attention)
+
+        self.assertEqual(overlay.shape, (8, 8, 3))
+        high_attention = overlay[-1, -1]
+        low_attention = overlay[0, 0]
+        self.assertGreater(int(high_attention[0]), int(low_attention[0]) + 80)
+        self.assertGreater(int(high_attention[0]), int(high_attention[2]))
 
 
 if __name__ == "__main__":

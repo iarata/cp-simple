@@ -232,23 +232,37 @@ def _gt_instances(target: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _attention_heatmap(attention: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     att = attention.astype(np.float32)
-    if att.max() > att.min():
-        att = (att - att.min()) / (att.max() - att.min())
+    if att.ndim == 3:
+        att = att.mean(axis=0)
+    finite = np.isfinite(att)
+    if not finite.any():
+        att = np.zeros_like(att, dtype=np.float32)
+    else:
+        att = np.where(finite, att, 0.0)
+        lo, hi = np.percentile(att[finite], [5, 99])
+        if hi > lo:
+            att = np.clip((att - lo) / (hi - lo), 0.0, 1.0)
+            att = np.sqrt(att)
+        elif att.max() > 0:
+            att = np.ones_like(att, dtype=np.float32)
     pil = Image.fromarray((att * 255).astype(np.uint8), mode="L").resize(
         (size[1], size[0]), Image.BILINEAR
     )
-    heat = np.asarray(pil, dtype=np.uint8)
+    heat = np.asarray(pil, dtype=np.float32) / 255.0
     rgb = np.zeros((heat.shape[0], heat.shape[1], 3), dtype=np.uint8)
-    rgb[..., 0] = heat
-    rgb[..., 1] = (heat // 2)
+    rgb[..., 0] = (255.0 * heat).astype(np.uint8)
+    rgb[..., 1] = (220.0 * np.power(heat, 1.4)).astype(np.uint8)
+    rgb[..., 2] = (80.0 * np.power(1.0 - heat, 2.0)).astype(np.uint8)
     return rgb
 
 
 def _attention_overlay(image: torch.Tensor, attention: np.ndarray) -> np.ndarray:
     height, width = int(image.shape[-2]), int(image.shape[-1])
     base = (image.detach().cpu().numpy().transpose(1, 2, 0) * 255).clip(0, 255).astype(np.uint8)
+    gray = np.dot(base[..., :3], [0.299, 0.587, 0.114])[..., None]
+    base = np.repeat(gray, 3, axis=-1).astype(np.float32)
     heat = _attention_heatmap(attention, (height, width))
-    blended = (0.55 * base + 0.45 * heat).clip(0, 255).astype(np.uint8)
+    blended = (0.28 * base + 0.72 * heat).clip(0, 255).astype(np.uint8)
     return blended
 
 
@@ -299,16 +313,21 @@ def run_fast_validation(
                 pred_img = _render_overlay(img_dev, preds, probe.cat_id_to_name)
                 image_id = int(target_dev["image_id"].item())
                 caption = f"{kind} [{sample_idx}] image_id={image_id}"
-                gt_wandb = wandb.Image(gt_img, caption=f"GT {caption}")
-                pred_wandb = wandb.Image(pred_img, caption=f"Pred {caption}")
-                attn_wandb = None
-                gt_logs.append(gt_wandb)
-                pred_logs.append(pred_wandb)
+                gt_caption = f"GT {caption}"
+                pred_caption = f"Pred {caption}"
+                gt_log = wandb.Image(gt_img, caption=gt_caption)
+                pred_log = wandb.Image(pred_img, caption=pred_caption)
+                gt_table = wandb.Image(gt_img, caption=gt_caption)
+                pred_table = wandb.Image(pred_img, caption=pred_caption)
+                attn_table = None
+                gt_logs.append(gt_log)
+                pred_logs.append(pred_log)
                 attention = attention_for_top_query(outputs, batch_idx=0)
                 if attention is not None:
                     attn_img = _attention_overlay(img_dev, attention)
-                    attn_wandb = wandb.Image(attn_img, caption=f"Attn {caption}")
-                    attn_logs.append(attn_wandb)
+                    attn_caption = f"Attn {caption}"
+                    attn_logs.append(wandb.Image(attn_img, caption=attn_caption))
+                    attn_table = wandb.Image(attn_img, caption=attn_caption)
                 meta = target.get("augmentation_meta", {})
                 table_rows.append(
                     [
@@ -317,9 +336,9 @@ def run_fast_validation(
                         int(image_id),
                         kind,
                         bool(meta.get("applied", False)) if isinstance(meta, dict) else False,
-                        gt_wandb,
-                        pred_wandb,
-                        attn_wandb,
+                        gt_table,
+                        pred_table,
+                        attn_table,
                     ]
                 )
                 del outputs
