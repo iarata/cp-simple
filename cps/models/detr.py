@@ -343,8 +343,12 @@ class TinyDETRSegmenter(nn.Module):
         return layer_idx
 
     def forward(
-        self, images: list[torch.Tensor], return_attention: bool = False
+        self,
+        images: list[torch.Tensor],
+        targets: list[dict[str, torch.Tensor]] | None = None,
+        return_attention: bool = False,
     ) -> dict[str, torch.Tensor]:
+        del targets  # accepted for cross-model signature parity; DETR computes loss from outputs
         src, mask = nested_tensor_from_tensor_list(images)
         features = self.backbone(src)
         small_mask = F.interpolate(mask[:, None].float(), size=features.shape[-2:]).to(torch.bool)[

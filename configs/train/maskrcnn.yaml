@@ -1,0 +1,25 @@
+defaults:
+  - default
+  - _self_
+
+# Tuned for Mask R-CNN with Swin-Tiny on 25%-COCO. The defaults below are the
+# ones that move the needle most vs. the DETR baseline:
+# * `epochs: 24` — Mask R-CNN converges fast with a pretrained backbone; this
+#   gets a usable mAP curve without the 300-epoch DETR regime.
+# * `lr_schedule: cosine` — decay is what lets the loss leave the mid-training
+#   plateau where DETR was stalling.
+# * `gradient_clip_norm: 1.0` — the previous 0.1 was over-regularising;
+#   torchvision Mask R-CNN gradients sit in the 0.5–1.0 range naturally.
+# * `warmup_steps: 1000` — Swin-T attention layers are touchy with cold-start
+#   LR; longer warmup keeps them from blowing up before they stabilise.
+epochs: 24
+batch_size: 16
+lr: 0.0001
+backbone_lr: 0.00001
+weight_decay: 0.0001
+warmup_steps: 1000
+gradient_clip_norm: 1.0
+lr_schedule: cosine
+min_lr_ratio: 0.01
+eval_every: 0
+log_every: 20

@@ -123,8 +123,13 @@ class YOLO26SegmentationModel(nn.Module):
             self.stride_multiple = int(config.stride_multiple)
         self.stride_multiple = max(1, self.stride_multiple)
 
-    def forward(self, images: list[torch.Tensor], return_attention: bool = False) -> dict[str, Any]:
-        del return_attention  # YOLO has no decoder attention map to expose.
+    def forward(
+        self,
+        images: list[torch.Tensor],
+        targets: list[dict[str, torch.Tensor]] | None = None,
+        return_attention: bool = False,
+    ) -> dict[str, Any]:
+        del return_attention, targets  # YOLO computes loss from preds + project targets later
         batch = pad_images_to_tensor(images, stride_multiple=self.stride_multiple)
         preds = self.model(batch)
         outputs: dict[str, Any] = {

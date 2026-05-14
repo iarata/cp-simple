@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -434,6 +435,35 @@ def _warmup_factor(step: int, warmup_steps: int) -> float:
     return float(step + 1) / float(warmup_steps)
 
 
+def _lr_factor(
+    step: int,
+    *,
+    warmup_steps: int,
+    total_steps: int,
+    schedule: str,
+    min_ratio: float,
+) -> float:
+    """LR scale at ``step``. Warmup ramps linearly, then optional cosine decay.
+
+    Without post-warmup decay the loss plateaus at a saddle — that was a major
+    cause of the DETR run stalling at loss 3.7. Cosine is the default schedule
+    for the MaskRCNN swin-t configs; older runs that omit the field stay on
+    ``warmup_only`` and behave exactly as before.
+    """
+
+    if warmup_steps > 0 and step < warmup_steps:
+        return float(step + 1) / float(warmup_steps)
+    if schedule == "warmup_only" or total_steps <= warmup_steps:
+        return 1.0
+    if schedule == "cosine":
+        denom = max(1, total_steps - warmup_steps)
+        progress = (step - warmup_steps) / float(denom)
+        progress = min(1.0, max(0.0, progress))
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return float(min_ratio + (1.0 - min_ratio) * cosine)
+    raise ValueError(f"Unknown train.lr_schedule={schedule!r}; use warmup_only or cosine.")
+
+
 def train_one_epoch(
     model: torch.nn.Module,
     criterion: torch.nn.Module,
@@ -450,6 +480,9 @@ def train_one_epoch(
     use_grad_scaler = amp_dtype == torch.float16
     grad_scaler = torch.amp.GradScaler("cuda") if use_grad_scaler else None
     warmup_steps = int(getattr(cfg.train, "warmup_steps", 0) or 0)
+    schedule = str(getattr(cfg.train, "lr_schedule", "warmup_only") or "warmup_only").lower()
+    min_lr_ratio = float(getattr(cfg.train, "min_lr_ratio", 0.01))
+    total_epochs = int(cfg.train.epochs)
     base_lrs = [group["lr"] for group in optimizer.param_groups]
     log_every = max(int(cfg.train.log_every), 1)
     loss_sums_gpu: dict[str, torch.Tensor] = {}
@@ -457,22 +490,28 @@ def train_one_epoch(
     progress = tqdm(data_loader, desc=f"train epoch {epoch}", leave=False)
     last_logged_losses: dict[str, float] = {}
     steps_per_epoch = len(data_loader)
+    total_steps = max(1, total_epochs * steps_per_epoch)
     for step, (images, targets) in enumerate(progress):
         global_step = epoch * steps_per_epoch + step
-        if warmup_steps > 0:
-            factor = _warmup_factor(global_step, warmup_steps)
-            for group, base_lr in zip(optimizer.param_groups, base_lrs, strict=False):
-                group["lr"] = base_lr * factor
+        factor = _lr_factor(
+            global_step,
+            warmup_steps=warmup_steps,
+            total_steps=total_steps,
+            schedule=schedule,
+            min_ratio=min_lr_ratio,
+        )
+        for group, base_lr in zip(optimizer.param_groups, base_lrs, strict=False):
+            group["lr"] = base_lr * factor
         images = [img.to(device, non_blocking=True) for img in images]
         targets = move_targets_to_device(targets, device)
         optimizer.zero_grad(set_to_none=True)
         if amp_dtype is not None:
             with torch.autocast(device_type="cuda", dtype=amp_dtype):
-                outputs = model(images)
+                outputs = model(images, targets=targets)
                 losses = criterion(outputs, targets)
             loss = losses["loss"]
         else:
-            outputs = model(images)
+            outputs = model(images, targets=targets)
             losses = criterion(outputs, targets)
             loss = losses["loss"]
         if grad_scaler is not None:

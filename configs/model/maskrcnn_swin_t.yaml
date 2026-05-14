@@ -1,0 +1,32 @@
+name: maskrcnn_swin_t
+family: maskrcnn
+backbone_name: swin_tiny_patch4_window7_224
+backbone_pretrained: true
+backbone_freeze: false
+image_size: 512
+fpn_out_channels: 256
+# ImageNet normalization. Dataset images arrive in [0, 1] (uint8 / 255). The
+# wrapped torchvision MaskRCNN's GeneralizedRCNNTransform subtracts these and
+# divides by std — so the Swin backbone sees ImageNet-normalized inputs as
+# pretraining expects.
+image_mean: [0.485, 0.456, 0.406]
+image_std: [0.229, 0.224, 0.225]
+# Detection-head settings
+box_detections_per_image: 100
+box_score_thresh: 0.0  # let outputs_to_predictions do the score-cutoff filtering
+box_nms_thresh: 0.5
+rpn_pre_nms_top_n_train: 2000
+rpn_pre_nms_top_n_test: 1000
+rpn_post_nms_top_n_train: 1000
+rpn_post_nms_top_n_test: 1000
+# 5-level FPN: P2..P5 from the Swin stages + P6 from LastLevelMaxPool.
+anchor_sizes: [[32], [64], [128], [256], [512]]
+anchor_aspect_ratios: [0.5, 1.0, 2.0]
+# Which Swin stage's feature norm to use as the attention map for shortcut
+# analysis. 0 (stride 4) is most spatially precise; 3 (stride 32) is most
+# semantic. Stage 3 is the standard choice — it answers "what does the model
+# pay attention to to decide what's in the scene".
+attention_stage: 3
+# Optional per-loss-component weights. Keys mirror torchvision's loss dict:
+# loss_classifier, loss_box_reg, loss_mask, loss_objectness, loss_rpn_box_reg.
+loss_weights: {}

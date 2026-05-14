@@ -16,6 +16,17 @@ from cps.models.detr import (
 from cps.models.detr import (
     outputs_to_predictions as detr_outputs_to_predictions,
 )
+from cps.models.mask_rcnn import (
+    MASK_RCNN_MODEL_TYPE,
+    MaskRCNNCriterion,
+    MaskRCNNSegmenter,
+)
+from cps.models.mask_rcnn import (
+    build_model_and_criterion as build_mask_rcnn_model_and_criterion,
+)
+from cps.models.mask_rcnn import (
+    outputs_to_predictions as mask_rcnn_outputs_to_predictions,
+)
 from cps.models.yolo import (
     YOLO_MODEL_TYPE,
     YOLO26SegmentationCriterion,
@@ -40,11 +51,28 @@ def _is_yolo26_config(cfg: Any) -> bool:
     return family == "yolo26" or name.startswith("yolo26") or architecture.startswith("yolo26")
 
 
+def _is_mask_rcnn_config(cfg: Any) -> bool:
+    family = str(_cfg_get(cfg, "family", "")).lower()
+    name = str(_cfg_get(cfg, "name", "")).lower()
+    architecture = str(_cfg_get(cfg, "architecture", "")).lower()
+    return (
+        family in {"maskrcnn", "mask_rcnn"}
+        or name.startswith("maskrcnn")
+        or name.startswith("mask_rcnn")
+        or architecture.startswith("maskrcnn")
+        or architecture.startswith("mask_rcnn")
+    )
+
+
 def build_model_and_criterion(
     cfg: Any, num_classes: int, train_cfg: Any | None = None
 ) -> tuple[torch.nn.Module, torch.nn.Module]:
     if _is_yolo26_config(cfg):
         return build_yolo_model_and_criterion(cfg, num_classes=num_classes, train_cfg=train_cfg)
+    if _is_mask_rcnn_config(cfg):
+        return build_mask_rcnn_model_and_criterion(
+            cfg, num_classes=num_classes, train_cfg=train_cfg
+        )
     return build_detr_model_and_criterion(cfg, num_classes=num_classes)
 
 
@@ -70,6 +98,17 @@ def outputs_to_predictions(
             include_masks=include_masks,
             target_size_key=target_size_key,
         )
+    if outputs.get("model_type") == MASK_RCNN_MODEL_TYPE:
+        return mask_rcnn_outputs_to_predictions(
+            outputs,
+            targets,
+            label_to_cat_id,
+            score_threshold=score_threshold,
+            max_detections=max_detections,
+            mask_threshold=mask_threshold,
+            include_masks=include_masks,
+            target_size_key=target_size_key,
+        )
     return detr_outputs_to_predictions(
         outputs,
         targets,
@@ -84,6 +123,9 @@ def outputs_to_predictions(
 
 __all__ = [
     "DETRCriterion",
+    "MASK_RCNN_MODEL_TYPE",
+    "MaskRCNNCriterion",
+    "MaskRCNNSegmenter",
     "TinyDETRSegmenter",
     "YOLO26SegmentationCriterion",
     "YOLO26SegmentationModel",

@@ -17,6 +17,11 @@ backbone_lr: 0.00001 # standard DETR ratio — pretrained backbones need a 10× 
 weight_decay: 0.0001
 gradient_clip_norm: 0.1
 warmup_steps: 500
+# Post-warmup LR schedule. `warmup_only` keeps base LR constant (legacy behaviour);
+# `cosine` decays to `min_lr_ratio * base_lr` over the remaining steps and is what
+# MaskRCNN training expects so the loss can escape mid-training plateaus.
+lr_schedule: warmup_only
+min_lr_ratio: 0.01
 amp: true # bf16 autocast on CUDA; halves activation memory and ~1.5–2× iter/s
 eval_every: 0 # 0 means run full evaluation only after the final epoch
 log_every: 10
