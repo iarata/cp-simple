@@ -37,6 +37,11 @@ class MaskRCNNConfig:
     backbone_name: str = "swin_tiny_patch4_window7_224"
     backbone_pretrained: bool = True
     backbone_freeze: bool = False
+    # If True, calls timm's ``set_grad_checkpointing(True)`` on the Swin body.
+    # This is the biggest backbone-side VRAM win for large batches: Swin
+    # otherwise keeps every block's activations on the forward tape. Trades
+    # extra compute for lower activation memory.
+    backbone_grad_checkpointing: bool = True
     image_size: int = 512
     fpn_out_channels: int = 256
     image_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
@@ -45,8 +50,26 @@ class MaskRCNNConfig:
     box_detections_per_image: int = 100
     box_score_thresh: float = 0.0  # let outputs_to_predictions do the filtering
     box_nms_thresh: float = 0.5
-    rpn_pre_nms_top_n_train: int = 2000
+    # Sampled RoIs per image used for box + mask loss.
+    # Torchvision's default is 512. At batch=64 that sends 32k RoIs through the
+    # box head and up to 8k positive RoIs through the mask head, producing very
+    # large mask-logit and autograd tensors. 128 is the standard memory-friendly
+    # value used for large-batch Mask R-CNN training; positives still cover the
+    # gradient mix well at fraction=0.25.
+    box_batch_size_per_image: int = 128
+    box_positive_fraction: float = 0.25
+    # Sampled anchors per image for RPN loss. Torchvision default is 256;
+    # halving lets us double batch size without hurting RPN learnability.
+    rpn_batch_size_per_image: int = 128
+    rpn_positive_fraction: float = 0.5
+    # Top-K anchor candidates before NMS, per FPN level. The torchvision
+    # default is 2000 per level, or 10000 boxes/image with this 5-level FPN.
+    # At batch=64 that is 640k candidate boxes carried into NMS each step.
+    rpn_pre_nms_top_n_train: int = 1000
     rpn_pre_nms_top_n_test: int = 1000
+    # Top-K proposals after NMS that are passed to the RoI heads. The post-NMS
+    # number multiplied by batch size sets the pool the box-sampler draws from;
+    # 1000 is the standard.
     rpn_post_nms_top_n_train: int = 1000
     rpn_post_nms_top_n_test: int = 1000
     # Anchor pyramid: 5 levels (P2..P6 from LastLevelMaxPool)
@@ -80,6 +103,9 @@ def model_config_from_cfg(cfg: Any) -> MaskRCNNConfig:
         backbone_name=str(_cfg_get(cfg, "backbone_name", base.backbone_name)),
         backbone_pretrained=bool(_cfg_get(cfg, "backbone_pretrained", base.backbone_pretrained)),
         backbone_freeze=bool(_cfg_get(cfg, "backbone_freeze", base.backbone_freeze)),
+        backbone_grad_checkpointing=bool(
+            _cfg_get(cfg, "backbone_grad_checkpointing", base.backbone_grad_checkpointing)
+        ),
         image_size=int(_cfg_get(cfg, "image_size", base.image_size)),
         fpn_out_channels=int(_cfg_get(cfg, "fpn_out_channels", base.fpn_out_channels)),
         image_mean=tuple(float(v) for v in image_mean),
@@ -89,6 +115,18 @@ def model_config_from_cfg(cfg: Any) -> MaskRCNNConfig:
         ),
         box_score_thresh=float(_cfg_get(cfg, "box_score_thresh", base.box_score_thresh)),
         box_nms_thresh=float(_cfg_get(cfg, "box_nms_thresh", base.box_nms_thresh)),
+        box_batch_size_per_image=int(
+            _cfg_get(cfg, "box_batch_size_per_image", base.box_batch_size_per_image)
+        ),
+        box_positive_fraction=float(
+            _cfg_get(cfg, "box_positive_fraction", base.box_positive_fraction)
+        ),
+        rpn_batch_size_per_image=int(
+            _cfg_get(cfg, "rpn_batch_size_per_image", base.rpn_batch_size_per_image)
+        ),
+        rpn_positive_fraction=float(
+            _cfg_get(cfg, "rpn_positive_fraction", base.rpn_positive_fraction)
+        ),
         rpn_pre_nms_top_n_train=int(
             _cfg_get(cfg, "rpn_pre_nms_top_n_train", base.rpn_pre_nms_top_n_train)
         ),
@@ -129,6 +167,11 @@ class TimmSwinBackboneBody(nn.Module):
         self.feature_info = self.body.feature_info
         self._attention_stage = int(config.attention_stage)
         self._latest_attention: torch.Tensor | None = None
+        if config.backbone_grad_checkpointing and hasattr(self.body, "set_grad_checkpointing"):
+            # timm exposes ``set_grad_checkpointing(True)`` to recompute each
+            # transformer block in backward instead of keeping its activations.
+            # Cuts the Swin tape memory roughly in half for ~25% extra compute.
+            self.body.set_grad_checkpointing(True)
         if config.backbone_freeze:
             for p in self.body.parameters():
                 p.requires_grad = False
@@ -227,6 +270,10 @@ class MaskRCNNSegmenter(nn.Module):
             box_detections_per_img=config.box_detections_per_image,
             box_score_thresh=config.box_score_thresh,
             box_nms_thresh=config.box_nms_thresh,
+            box_batch_size_per_image=config.box_batch_size_per_image,
+            box_positive_fraction=config.box_positive_fraction,
+            rpn_batch_size_per_image=config.rpn_batch_size_per_image,
+            rpn_positive_fraction=config.rpn_positive_fraction,
             rpn_pre_nms_top_n_train=config.rpn_pre_nms_top_n_train,
             rpn_pre_nms_top_n_test=config.rpn_pre_nms_top_n_test,
             rpn_post_nms_top_n_train=config.rpn_post_nms_top_n_train,

@@ -3,6 +3,9 @@ family: maskrcnn
 backbone_name: swin_tiny_patch4_window7_224
 backbone_pretrained: true
 backbone_freeze: false
+# Recompute Swin blocks in backward instead of retaining the full activation
+# tape. This is the main backbone-side VRAM reduction for large batches.
+backbone_grad_checkpointing: true
 image_size: 512
 fpn_out_channels: 256
 # ImageNet normalization. Dataset images arrive in [0, 1] (uint8 / 255). The
@@ -15,7 +18,13 @@ image_std: [0.229, 0.224, 0.225]
 box_detections_per_image: 100
 box_score_thresh: 0.0  # let outputs_to_predictions do the score-cutoff filtering
 box_nms_thresh: 0.5
-rpn_pre_nms_top_n_train: 2000
+# Lower-memory training sampler/proposal counts. Torchvision's defaults are
+# tuned for smaller batches and become expensive at train.batch_size=64.
+box_batch_size_per_image: 128
+box_positive_fraction: 0.25
+rpn_batch_size_per_image: 128
+rpn_positive_fraction: 0.5
+rpn_pre_nms_top_n_train: 1000
 rpn_pre_nms_top_n_test: 1000
 rpn_post_nms_top_n_train: 1000
 rpn_post_nms_top_n_test: 1000
