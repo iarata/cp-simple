@@ -2,6 +2,7 @@
 
 defaults:
   - /train_config
+  - override /model: detr_timm_resnet18
   - override /augmentation: none
   - _self_
 
@@ -15,8 +16,8 @@ train:
   run_name: premade_lbm_copy_paste_pct_025_seed_1337
 
 eval:
-  mode: gpu_loss
-  visualize_batches: 0
+  mode: full
+  visualize_batches: 2
 
 wandb:
   group: premade_pct_025_seed_1337

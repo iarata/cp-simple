@@ -31,6 +31,7 @@ dependencies = [
     "torchvision",
     "tqdm",
     "transformers>=5.8.0",
+    "timm",
     "typer",
     "wandb",
     "modelscope>=1.36.3",

@@ -46,11 +46,17 @@ def save_decoder_attention_maps(
         )
         arr = arr.astype(np.uint8)
         image_id = int(target["image_id"].item())
+        layer_idx = outputs.get("attention_layer_index")
+        title = f"decoder cross-attention image {image_id}"
+        if torch.is_tensor(layer_idx):
+            title = (
+                f"decoder layer {int(layer_idx.detach().cpu().item())} attention image {image_id}"
+            )
         save_attention_overlay(
             arr,
             attention,
             output_dir / f"attention_batch{batch_offset:04d}_image{image_id}.png",
-            title=f"decoder cross-attention image {image_id}",
+            title=title,
         )
         saved += 1
     return saved

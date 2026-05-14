@@ -189,12 +189,13 @@ def run_training(cfg: Any) -> dict[str, Any]:
     info = device_info(str(cfg.train.device))
     device = get_device(str(cfg.train.device))
     logger.info("Using device: {} ({})", info.selected, info.name)
+    eval_every = int(getattr(cfg.train, "eval_every", 0) or 0)
     logger.info(
         "Dataset {} - Batch size: {}, Epochs: {}, Eval every: {}",
         cfg.dataset.name,
         cfg.train.batch_size,
         cfg.train.epochs,
-        cfg.train.eval_every,
+        eval_every if eval_every > 0 else "final_only",
     )
     run = init_wandb(cfg, job_type="train")
     train_loader, val_loader, train_dataset, val_dataset = build_dataloaders(cfg)
@@ -229,11 +230,13 @@ def run_training(cfg: Any) -> dict[str, Any]:
             run=run,
         )
         metrics = {"train": train_metrics, "epoch": epoch}
-        should_eval = (epoch + 1) % int(cfg.train.eval_every) == 0 or epoch == int(
-            cfg.train.epochs
-        ) - 1
+        is_final_epoch = epoch == int(cfg.train.epochs) - 1
+        should_eval = is_final_epoch or (eval_every > 0 and (epoch + 1) % eval_every == 0)
         if should_eval:
-            val_dir = output_dir / f"val_epoch_{epoch:03d}"
+            val_dir_name = (
+                f"final_eval_epoch_{epoch:03d}" if is_final_epoch else f"val_epoch_{epoch:03d}"
+            )
+            val_dir = output_dir / val_dir_name
             val_metrics = validation_loop(
                 model=model,
                 criterion=criterion,

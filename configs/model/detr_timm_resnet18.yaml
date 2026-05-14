@@ -1,11 +1,18 @@
-name: tiny_detr_segmenter
+name: detr_timm_resnet18
+backbone: timm
+backbone_name: resnet18
+backbone_pretrained: true
+backbone_out_index: 3
+backbone_freeze: false
+normalize_backbone_inputs: true
 hidden_dim: 128
 num_queries: 100
-num_encoder_layers: 3
+num_encoder_layers: 2
 num_decoder_layers: 3
 nheads: 8
 dim_feedforward: 512
 dropout: 0.1
+attention_layer: first
 eos_coef: 0.1
 cost_class: 1.0
 cost_bbox: 5.0
@@ -15,5 +22,3 @@ giou_loss_coef: 2.0
 mask_loss_coef: 1.0
 dice_loss_coef: 1.0
 mask_loss_size: 128
-backbone: tiny_cnn
-attention_layer: last

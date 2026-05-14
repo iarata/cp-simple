@@ -46,6 +46,76 @@ class DETRMaskMemoryTest(unittest.TestCase):
         self.assertIn("cross_attention", outputs)
         self.assertEqual(outputs["cross_attention"].shape[:3], (1, 4, 3))
 
+    def test_forward_can_store_first_decoder_attention(self) -> None:
+        config = ModelConfig(
+            hidden_dim=16,
+            num_queries=3,
+            num_encoder_layers=1,
+            num_decoder_layers=2,
+            nheads=4,
+            dim_feedforward=32,
+            attention_layer="first",
+        )
+        model = TinyDETRSegmenter(num_classes=2, config=config)
+        model.eval()
+        images = [torch.rand(3, 64, 80)]
+
+        with torch.no_grad():
+            outputs = model(images, return_attention=True)
+
+        self.assertIn("cross_attention", outputs)
+        self.assertEqual(int(outputs["attention_layer_index"].item()), 0)
+        self.assertIsNotNone(model.decoder_layers[0].last_cross_attention)
+        self.assertIsNone(model.decoder_layers[1].last_cross_attention)
+
+    def test_forward_supports_timm_backbone_without_pretrained_download(self) -> None:
+        config = ModelConfig(
+            hidden_dim=16,
+            num_queries=3,
+            num_encoder_layers=1,
+            num_decoder_layers=1,
+            nheads=4,
+            dim_feedforward=32,
+            backbone="timm",
+            backbone_name="resnet18",
+            backbone_pretrained=False,
+            backbone_out_index=3,
+            attention_layer="first",
+        )
+        model = TinyDETRSegmenter(num_classes=2, config=config)
+        model.eval()
+        images = [torch.rand(3, 64, 80)]
+
+        with torch.no_grad():
+            outputs = model(images, return_attention=True)
+
+        self.assertEqual(tuple(outputs["pred_masks"].shape), (1, 3, 4, 5))
+        self.assertIn("cross_attention", outputs)
+
+    def test_forward_supports_timm_efficientnet_backbone(self) -> None:
+        config = ModelConfig(
+            hidden_dim=16,
+            num_queries=3,
+            num_encoder_layers=1,
+            num_decoder_layers=1,
+            nheads=4,
+            dim_feedforward=32,
+            backbone="timm",
+            backbone_name="efficientnet_b0",
+            backbone_pretrained=False,
+            backbone_out_index=3,
+            attention_layer="first",
+        )
+        model = TinyDETRSegmenter(num_classes=2, config=config)
+        model.eval()
+        images = [torch.rand(3, 64, 80)]
+
+        with torch.no_grad():
+            outputs = model(images, return_attention=True)
+
+        self.assertEqual(tuple(outputs["pred_masks"].shape), (1, 3, 4, 5))
+        self.assertEqual(outputs["attention_hw"].tolist(), [4, 5])
+
     def test_outputs_to_predictions_upsamples_selected_masks(self) -> None:
         outputs = {
             "pred_logits": torch.tensor([[[0.0, 7.0, 0.0], [0.0, 0.0, 5.0]]]),

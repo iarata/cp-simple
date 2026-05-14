@@ -7,7 +7,7 @@
 3. PCTNet-style copy-paste harmonization,
 4. LBM-style copy-paste harmonization.
 
-The baseline is intentionally simple: a small DETR-style instance segmenter with a CNN backbone, transformer encoder/decoder, fixed object queries, class/box heads, and a query-conditioned mask head. It is designed for controlled augmentation experiments, not for state-of-the-art COCO results.
+The baseline is intentionally simple: a small DETR-style instance segmenter with a CNN backbone, transformer encoder/decoder, fixed object queries, class/box heads, and a query-conditioned mask head. Premade experiment configs use a small timm-backed DETR variant with an ImageNet-pretrained ResNet-18 visual encoder. EfficientNet-style timm backbones are also available through the same adapter. It is designed for controlled augmentation experiments, not for state-of-the-art COCO results.
 
 ## Design notes
 
@@ -147,6 +147,16 @@ uv run python -m cps.cli train --config-name train augmentation=pctnet_copy_past
 uv run python -m cps.cli train --config-name train augmentation=lbm_copy_paste subset.percent=10 augmentation.target_policy=underrepresented
 ```
 
+Use a pretrained timm EfficientNet backbone with:
+
+```bash
+uv run python -m cps.cli train --config-name train_premade/none_online_normal model=detr_timm_efficientnet_b0
+```
+
+Any timm feature backbone can be tried by overriding the model name directly,
+for example `model=detr_timm_efficientnet_b0 model.backbone_name=efficientnet_b1`
+or `model=detr_timm_efficientnet_b0 model.backbone_name=efficientnetv2_rw_s`.
+
 Checkpoints and config snapshots are saved under `models/runs/<method>_<subset>_seed_<seed>/` by default.
 
 Large server runs with many workers and large batches use
@@ -158,14 +168,15 @@ example `ulimit -n 65535`, or reduce the number of queued batches with
 Validation also uses `eval.forward_batch_size=16` by default, so large
 `eval.batch_size` values can improve loading throughput without forcing one
 large CUDA validation forward/export step.
-The premade training configs use `eval.mode=gpu_loss` for GPU-resident
-training-time validation with a greedy query/target assignment proxy. Use
-`eval.mode=bbox` to run bbox COCO metrics while skipping segmentation mask
-export/RLE work, or `eval.mode=loss` for exact DETR validation loss with the
-CPU Hungarian matcher. Run a standalone `evaluate` with `eval.mode=full` for
-final COCO segmentation metrics. Validation clears unused CUDA cache by default
-after each validation pass; set `eval.empty_cache_between_chunks=true` for more
-aggressive cleanup on tight VRAM budgets.
+Training runs full COCO evaluation only after the final epoch by default
+(`train.eval_every=0`). Set `train.eval_every` to a positive epoch interval only
+when you explicitly want interim validation. Use `eval.mode=bbox` to run bbox
+COCO metrics while skipping segmentation mask export/RLE work, `eval.mode=loss`
+for exact DETR validation loss with the CPU Hungarian matcher, or
+`eval.mode=gpu_loss` for a GPU-resident loss proxy without prediction export.
+Validation clears unused CUDA cache by default after each validation pass; set
+`eval.empty_cache_between_chunks=true` for more aggressive cleanup on tight VRAM
+budgets.
 
 ## Evaluate a checkpoint
 
@@ -227,7 +238,7 @@ skip image uploads.
 
 ## Shortcut-learning analysis
 
-Validation saves decoder cross-attention overlays for a configurable number of samples:
+Final evaluation saves decoder cross-attention overlays for a configurable number of samples. The pretrained premade configs read the first decoder cross-attention layer to help inspect shortcut learning:
 
 ```bash
 uv run python -m cps.cli evaluate --config-name eval \

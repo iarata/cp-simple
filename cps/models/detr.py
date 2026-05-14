@@ -35,6 +35,13 @@ class ModelConfig:
     mask_loss_coef: float = 1.0
     dice_loss_coef: float = 1.0
     mask_loss_size: int = 128
+    backbone: str = "tiny_cnn"
+    backbone_name: str = "resnet18"
+    backbone_pretrained: bool = True
+    backbone_out_index: int = 3
+    backbone_freeze: bool = False
+    normalize_backbone_inputs: bool = True
+    attention_layer: str = "last"
 
 
 def _cfg_get(cfg: Any, key: str, default: Any) -> Any:
@@ -63,6 +70,13 @@ def model_config_from_cfg(cfg: Any) -> ModelConfig:
         mask_loss_coef=float(_cfg_get(cfg, "mask_loss_coef", 1.0)),
         dice_loss_coef=float(_cfg_get(cfg, "dice_loss_coef", 1.0)),
         mask_loss_size=int(_cfg_get(cfg, "mask_loss_size", 128)),
+        backbone=str(_cfg_get(cfg, "backbone", "tiny_cnn")),
+        backbone_name=str(_cfg_get(cfg, "backbone_name", "resnet18")),
+        backbone_pretrained=bool(_cfg_get(cfg, "backbone_pretrained", True)),
+        backbone_out_index=int(_cfg_get(cfg, "backbone_out_index", 3)),
+        backbone_freeze=bool(_cfg_get(cfg, "backbone_freeze", False)),
+        normalize_backbone_inputs=bool(_cfg_get(cfg, "normalize_backbone_inputs", True)),
+        attention_layer=str(_cfg_get(cfg, "attention_layer", "last")),
     )
 
 
@@ -111,6 +125,13 @@ class PositionEmbeddingSine(nn.Module):
         return pos
 
 
+def _group_count(channels: int, max_groups: int = 8) -> int:
+    for groups in range(min(max_groups, channels), 0, -1):
+        if channels % groups == 0:
+            return groups
+    return 1
+
+
 class TinyBackbone(nn.Module):
     def __init__(self, hidden_dim: int) -> None:
         super().__init__()
@@ -119,24 +140,103 @@ class TinyBackbone(nn.Module):
         # while preserving enough spatial resolution for a lightweight mask head.
         self.body = nn.Sequential(
             nn.Conv2d(3, mid, kernel_size=7, stride=2, padding=3),
-            nn.GroupNorm(8, mid),
+            nn.GroupNorm(_group_count(mid), mid),
             nn.ReLU(inplace=True),
             nn.Conv2d(mid, mid, kernel_size=3, stride=2, padding=1),
-            nn.GroupNorm(8, mid),
+            nn.GroupNorm(_group_count(mid), mid),
             nn.ReLU(inplace=True),
             nn.Conv2d(mid, hidden_dim, kernel_size=3, stride=2, padding=1),
-            nn.GroupNorm(8, hidden_dim),
+            nn.GroupNorm(_group_count(hidden_dim), hidden_dim),
             nn.ReLU(inplace=True),
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=2, padding=1),
-            nn.GroupNorm(8, hidden_dim),
+            nn.GroupNorm(_group_count(hidden_dim), hidden_dim),
             nn.ReLU(inplace=True),
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(8, hidden_dim),
+            nn.GroupNorm(_group_count(hidden_dim), hidden_dim),
             nn.ReLU(inplace=True),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.body(x)
+
+
+class TimmBackbone(nn.Module):
+    """Pretrained timm visual encoder adapter for DETR features."""
+
+    def __init__(self, config: ModelConfig) -> None:
+        super().__init__()
+        self.config = config
+        try:
+            import timm
+        except ImportError as exc:
+            raise ImportError(
+                "model.backbone=timm requires the `timm` package. "
+                "Install project dependencies with `uv sync`."
+            ) from exc
+
+        self.body = timm.create_model(
+            config.backbone_name,
+            pretrained=config.backbone_pretrained,
+            features_only=True,
+            out_indices=(config.backbone_out_index,),
+        )
+        channels = self.body.feature_info.channels()
+        if not channels:
+            raise ValueError(f"timm model {config.backbone_name!r} did not expose feature info.")
+        in_channels = int(channels[-1])
+        self.proj = nn.Sequential(
+            nn.Conv2d(in_channels, config.hidden_dim, kernel_size=1),
+            nn.GroupNorm(_group_count(config.hidden_dim), config.hidden_dim),
+            nn.ReLU(inplace=True),
+        )
+        self.normalize_inputs = bool(config.normalize_backbone_inputs)
+        default_cfg = getattr(self.body, "default_cfg", {}) or {}
+        mean = torch.tensor(default_cfg.get("mean", (0.485, 0.456, 0.406)), dtype=torch.float32)
+        std = torch.tensor(default_cfg.get("std", (0.229, 0.224, 0.225)), dtype=torch.float32)
+        self.register_buffer("input_mean", mean.view(1, 3, 1, 1), persistent=False)
+        self.register_buffer("input_std", std.view(1, 3, 1, 1), persistent=False)
+        if config.backbone_freeze:
+            for parameter in self.body.parameters():
+                parameter.requires_grad_(False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.normalize_inputs:
+            x = (x - self.input_mean) / self.input_std.clamp(min=1e-6)
+        features = self.body(x)
+        feature = self._last_feature(features)
+        return self.proj(feature)
+
+    def _last_feature(self, features: Any) -> torch.Tensor:
+        if torch.is_tensor(features):
+            feature = features
+        elif isinstance(features, dict):
+            if not features:
+                raise ValueError(f"timm model {self.config.backbone_name!r} returned no features.")
+            feature = next(reversed(tuple(features.values())))
+        elif isinstance(features, (list, tuple)):
+            if not features:
+                raise ValueError(f"timm model {self.config.backbone_name!r} returned no features.")
+            feature = features[-1]
+        else:
+            raise TypeError(
+                f"timm model {self.config.backbone_name!r} returned unsupported feature type "
+                f"{type(features).__name__}."
+            )
+        if feature.ndim != 4:
+            raise ValueError(
+                f"timm model {self.config.backbone_name!r} returned a non-spatial feature tensor "
+                f"with shape {tuple(feature.shape)}."
+            )
+        return feature
+
+
+def build_backbone(config: ModelConfig) -> nn.Module:
+    backbone = config.backbone.lower()
+    if backbone in {"tiny", "tiny_cnn", "cnn"}:
+        return TinyBackbone(config.hidden_dim)
+    if backbone in {"timm", "pretrained", "timm_pretrained"}:
+        return TimmBackbone(config)
+    raise ValueError("model.backbone must be one of: tiny_cnn, timm.")
 
 
 class DecoderLayer(nn.Module):
@@ -191,7 +291,7 @@ class TinyDETRSegmenter(nn.Module):
         self.num_classes = int(num_classes)
         self.config = config
         hidden_dim = config.hidden_dim
-        self.backbone = TinyBackbone(hidden_dim)
+        self.backbone = build_backbone(config)
         self.position_embedding = PositionEmbeddingSine(hidden_dim // 2)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden_dim,
@@ -212,6 +312,27 @@ class TinyDETRSegmenter(nn.Module):
         self.mask_embed = MLP(hidden_dim, hidden_dim, hidden_dim, 3)
         self.mask_feature_proj = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1)
 
+    def attention_layer_index(self) -> int:
+        layer = str(self.config.attention_layer).strip().lower()
+        last_idx = len(self.decoder_layers) - 1
+        if layer in {"first", "0"}:
+            return 0
+        if layer in {"last", "-1"}:
+            return last_idx
+        try:
+            layer_idx = int(layer)
+        except ValueError as exc:
+            raise ValueError(
+                "model.attention_layer must be 'first', 'last', or a decoder layer index."
+            ) from exc
+        if layer_idx < 0:
+            layer_idx = len(self.decoder_layers) + layer_idx
+        if layer_idx < 0 or layer_idx > last_idx:
+            raise ValueError(
+                f"model.attention_layer={self.config.attention_layer!r} is outside 0..{last_idx}."
+            )
+        return layer_idx
+
     def forward(
         self, images: list[torch.Tensor], return_attention: bool = False
     ) -> dict[str, torch.Tensor]:
@@ -227,13 +348,13 @@ class TinyDETRSegmenter(nn.Module):
         memory = self.encoder(memory + pos_flat, src_key_padding_mask=mask_flat)
         queries = self.query_embed.weight.unsqueeze(0).repeat(src.shape[0], 1, 1)
         hs = queries
-        last_layer_idx = len(self.decoder_layers) - 1
+        attention_layer_idx = self.attention_layer_index() if return_attention else -1
         for layer_idx, layer in enumerate(self.decoder_layers):
             hs = layer(
                 hs,
                 memory,
                 memory_key_padding_mask=mask_flat,
-                store_attention=return_attention and layer_idx == last_layer_idx,
+                store_attention=return_attention and layer_idx == attention_layer_idx,
             )
         logits = self.class_embed(hs)
         boxes = self.bbox_embed(hs).sigmoid()
@@ -248,9 +369,14 @@ class TinyDETRSegmenter(nn.Module):
             "pred_masks": pred_masks,
             "feature_mask": small_mask,
         }
-        if return_attention and self.decoder_layers[-1].last_cross_attention is not None:
-            out["cross_attention"] = self.decoder_layers[-1].last_cross_attention
+        if (
+            return_attention
+            and attention_layer_idx >= 0
+            and self.decoder_layers[attention_layer_idx].last_cross_attention is not None
+        ):
+            out["cross_attention"] = self.decoder_layers[attention_layer_idx].last_cross_attention
             out["attention_hw"] = torch.tensor(features.shape[-2:], device=src.device)
+            out["attention_layer_index"] = torch.tensor(attention_layer_idx, device=src.device)
         return out
 
 
