@@ -101,7 +101,7 @@ def train(
         str, typer.Option("--config-name", help="Hydra config name.")
     ] = "train_config",
 ) -> None:
-    """Train one DETR-style instance segmentation experiment."""
+    """Train one instance segmentation experiment."""
 
     setup_logging()
     cfg = _load(config_name, list(ctx.args))

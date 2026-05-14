@@ -16,7 +16,7 @@ from tqdm import tqdm
 from cps.augmentations import build_augmentation
 from cps.data.coco import COCODataset, collate_fn
 from cps.data.subsets import percent_slug, premade_train_paths, premade_train_variant
-from cps.models.detr import build_model_and_criterion
+from cps.models import build_model_and_criterion
 from cps.paths import project_path
 from cps.training.checkpoints import load_checkpoint, save_checkpoint
 from cps.training.fast_eval import ProbeSet, build_probe_set, run_fast_validation
@@ -303,7 +303,9 @@ def run_training(cfg: Any) -> dict[str, Any]:
     )
     run = init_wandb(cfg, job_type="train")
     train_loader, val_loader, train_dataset, val_dataset = build_dataloaders(cfg)
-    model, criterion = build_model_and_criterion(cfg.model, num_classes=train_dataset.num_classes)
+    model, criterion = build_model_and_criterion(
+        cfg.model, num_classes=train_dataset.num_classes, train_cfg=cfg.train
+    )
     model.to(device)
     criterion.to(device)
     optimizer = build_optimizer(model, cfg)
@@ -337,6 +339,8 @@ def run_training(cfg: Any) -> dict[str, Any]:
             cfg=cfg,
             run=run,
         )
+        if hasattr(criterion, "update"):
+            criterion.update()
         metrics = {"train": train_metrics, "epoch": epoch}
         is_final_epoch = epoch == int(cfg.train.epochs) - 1
         if probe is not None and fast_eval_every > 0 and (epoch + 1) % fast_eval_every == 0:
@@ -557,7 +561,9 @@ def run_evaluation(cfg: Any) -> dict[str, Any]:
         val_dataset,
         **_dataloader_kwargs(cfg, "val", shuffle=False),
     )
-    model, criterion = build_model_and_criterion(cfg.model, num_classes=val_dataset.num_classes)
+    model, criterion = build_model_and_criterion(
+        cfg.model, num_classes=val_dataset.num_classes, train_cfg=cfg.train
+    )
     model.to(device)
     criterion.to(device)
     checkpoint = getattr(cfg.eval, "checkpoint", None) or getattr(cfg, "checkpoint", None)

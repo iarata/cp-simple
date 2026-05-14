@@ -14,10 +14,10 @@ from tqdm import tqdm
 from cps.analysis.attention import save_decoder_attention_maps
 from cps.data.visualization import overlay_instances, save_image_grid
 from cps.evaluation.coco_metrics import evaluate_coco_predictions
+from cps.models import outputs_to_predictions
 from cps.models.detr import (
     box_xyxy_to_cxcywh,
     normalize_boxes_xyxy,
-    outputs_to_predictions,
 )
 from cps.paths import project_path
 
@@ -99,7 +99,7 @@ def validation_loop(
                 return_attention = saved_attention < attention_samples
                 outputs = model(image_chunk, return_attention=return_attention)
                 losses = None
-                if mode == "gpu_loss" and criterion is not None:
+                if mode == "gpu_loss" and criterion is not None and hasattr(criterion, "matcher"):
                     losses = gpu_greedy_validation_losses(outputs, target_chunk, criterion)
                 elif criterion is not None:
                     losses = criterion(outputs, target_chunk)

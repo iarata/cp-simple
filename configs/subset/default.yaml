@@ -29,6 +29,19 @@ premade:
   max_preview_images: ${subset.max_preview_images}
   selection_seed_offset: 911503
   augmentation_seed_offset: 1000003
+  balance:
+    enabled: true # applied to copy-paste premade methods; none remains an unbalanced baseline
+    methods: [simple_copy_paste, pctnet_copy_paste, lbm_copy_paste]
+    target_strategy: min_count_multiplier # fixed, min_count_multiplier, quantile
+    target_instances_per_class: null # used when target_strategy=fixed
+    min_count_multiplier: 1.0
+    target_quantile: 0.25
+    min_target_instances: 100
+    max_target_instances: 1000
+    dominant_top_k: 1 # auto-treat the most frequent class, usually person, as capped
+    dominant_class_ids: []
+    dominant_max_overshoot_ratio: 1.5
+    seed_offset: 271828
   copy_paste:
     probability: 1.0
     max_paste_objects: 3

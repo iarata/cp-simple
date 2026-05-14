@@ -7,7 +7,7 @@ import math
 import os
 import shutil
 import subprocess
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from pathlib import Path
@@ -418,7 +418,9 @@ def _nvidia_smi_device_selector(device: str) -> str | None:
     else:
         return None
 
-    visible_devices = [item.strip() for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")]
+    visible_devices = [
+        item.strip() for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
+    ]
     visible_devices = [item for item in visible_devices if item]
     if visible_devices and cuda_index < len(visible_devices):
         return visible_devices[cuda_index]
@@ -637,6 +639,212 @@ def _copy_paste_cfg_for_premade(method: str, premade_cfg: Any) -> dict[str, Any]
     ):
         cp_cfg["target_policy"] = "underrepresented"
     return cp_cfg
+
+
+def _balance_cfg_for_premade(premade_cfg: Any) -> Any:
+    return cfg_get(premade_cfg, "balance", None)
+
+
+def _balance_enabled_for_method(method: str, premade_cfg: Any) -> bool:
+    balance_cfg = _balance_cfg_for_premade(premade_cfg)
+    if balance_cfg is None or not bool(cfg_get(balance_cfg, "enabled", False)):
+        return False
+    methods = {str(name) for name in list(cfg_get(balance_cfg, "methods", COPY_PASTE_METHODS))}
+    return method in methods
+
+
+def _annotation_counts_by_image(
+    coco: dict[str, Any],
+) -> tuple[dict[int, Counter[int]], dict[int, list[int]], Counter[int]]:
+    image_counts: dict[int, Counter[int]] = defaultdict(Counter)
+    category_to_images: dict[int, set[int]] = defaultdict(set)
+    pool_counts: Counter[int] = Counter()
+    for ann in coco.get("annotations", []):
+        if ann.get("iscrowd", 0):
+            continue
+        image_id = int(ann["image_id"])
+        category_id = int(ann["category_id"])
+        image_counts[image_id][category_id] += 1
+        category_to_images[category_id].add(image_id)
+        pool_counts[category_id] += 1
+    return (
+        dict(image_counts),
+        {cat_id: sorted(image_ids) for cat_id, image_ids in category_to_images.items()},
+        pool_counts,
+    )
+
+
+def _balance_target_instances(pool_counts: Counter[int], balance_cfg: Any) -> int:
+    positive_counts = [int(count) for count in pool_counts.values() if int(count) > 0]
+    if not positive_counts:
+        return 0
+
+    explicit = cfg_get(balance_cfg, "target_instances_per_class", None)
+    strategy = str(cfg_get(balance_cfg, "target_strategy", "min_count_multiplier")).lower()
+    if explicit is not None:
+        target = float(explicit)
+    elif strategy in {"fixed", "target", "manual"}:
+        raise ValueError(
+            "subset.premade.balance.target_instances_per_class must be set when "
+            "target_strategy=fixed."
+        )
+    elif strategy in {"quantile", "percentile"}:
+        quantile = float(cfg_get(balance_cfg, "target_quantile", 0.25))
+        if quantile <= 0 or quantile > 1:
+            raise ValueError("subset.premade.balance.target_quantile must be in (0, 1].")
+        target = float(np.quantile(np.asarray(positive_counts, dtype=np.float64), quantile))
+    elif strategy in {"min_count", "min_count_multiplier", "minimum"}:
+        multiplier = float(cfg_get(balance_cfg, "min_count_multiplier", 1.0))
+        if multiplier <= 0:
+            raise ValueError("subset.premade.balance.min_count_multiplier must be > 0.")
+        target = float(min(positive_counts)) * multiplier
+    else:
+        raise ValueError(
+            "subset.premade.balance.target_strategy must be one of: "
+            "fixed, min_count_multiplier, quantile."
+        )
+
+    min_target = cfg_get(balance_cfg, "min_target_instances", None)
+    max_target = cfg_get(balance_cfg, "max_target_instances", None)
+    if min_target is not None:
+        target = max(target, float(min_target))
+    if max_target is not None:
+        target = min(target, float(max_target))
+    return max(1, round(target))
+
+
+def _filter_coco_to_image_ids(coco: dict[str, Any], selected_image_ids: set[int]) -> dict[str, Any]:
+    return {
+        "info": coco.get("info", {}),
+        "licenses": coco.get("licenses", []),
+        "images": [
+            image for image in coco.get("images", []) if int(image["id"]) in selected_image_ids
+        ],
+        "annotations": [
+            ann for ann in coco.get("annotations", []) if int(ann["image_id"]) in selected_image_ids
+        ],
+        "categories": coco.get("categories", []),
+    }
+
+
+def _top_class_counts(counts: Counter[int], limit: int = 10) -> list[dict[str, int]]:
+    return [
+        {"category_id": int(category_id), "instances": int(instances)}
+        for category_id, instances in counts.most_common(limit)
+    ]
+
+
+def _dominant_balance_categories(pool_counts: Counter[int], balance_cfg: Any) -> set[int]:
+    configured = {
+        int(cat_id) for cat_id in list(cfg_get(balance_cfg, "dominant_class_ids", []) or [])
+    }
+    if configured:
+        return configured & set(pool_counts)
+    top_k = int(cfg_get(balance_cfg, "dominant_top_k", 1) or 0)
+    if top_k <= 0:
+        return set()
+    return {int(category_id) for category_id, _ in pool_counts.most_common(top_k)}
+
+
+def _balance_premade_subset(
+    premade: dict[str, Any],
+    premade_cfg: Any,
+    seed: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    balance_cfg = _balance_cfg_for_premade(premade_cfg)
+    image_counts, category_to_images, pool_counts = _annotation_counts_by_image(premade)
+    if not pool_counts:
+        return premade, {"enabled": False, "reason": "no_non_crowd_annotations"}
+
+    target_instances = _balance_target_instances(pool_counts, balance_cfg)
+    per_class_targets = {
+        int(category_id): min(int(count), target_instances)
+        for category_id, count in pool_counts.items()
+    }
+    dominant_categories = _dominant_balance_categories(pool_counts, balance_cfg)
+    dominant_overshoot_ratio = float(cfg_get(balance_cfg, "dominant_max_overshoot_ratio", 1.5))
+    if dominant_overshoot_ratio < 1.0:
+        raise ValueError("subset.premade.balance.dominant_max_overshoot_ratio must be >= 1.0.")
+    dominant_max_counts = {
+        category_id: max(
+            per_class_targets[category_id],
+            math.ceil(per_class_targets[category_id] * dominant_overshoot_ratio),
+        )
+        for category_id in dominant_categories
+    }
+    overrepresented = {
+        category_id
+        for category_id, count in pool_counts.items()
+        if int(count) > per_class_targets[category_id]
+    }
+
+    image_ids = [int(image["id"]) for image in premade.get("images", [])]
+    rng = np.random.default_rng(seed + int(cfg_get(balance_cfg, "seed_offset", 271_828)))
+    tie_break = {image_id: float(rng.random()) for image_id in image_ids}
+    selected_image_ids: set[int] = set()
+    current_counts: Counter[int] = Counter()
+
+    def sort_key(category_id: int, image_id: int) -> tuple[float, int, int, float]:
+        counts = image_counts.get(image_id, Counter())
+        dominant_load = sum(
+            int(count)
+            for cat_id, count in counts.items()
+            if cat_id in dominant_categories and cat_id != category_id
+        )
+        category_count = int(counts.get(category_id, 0))
+        category_order = category_count if category_id in overrepresented else -category_count
+        return (
+            dominant_load,
+            category_order,
+            sum(int(count) for count in counts.values()),
+            tie_break.get(image_id, 0.0),
+        )
+
+    for category_id in sorted(pool_counts, key=lambda cat_id: (pool_counts[cat_id], cat_id)):
+        target = per_class_targets[category_id]
+        candidates = sorted(
+            category_to_images[category_id], key=lambda img_id: sort_key(category_id, img_id)
+        )
+
+        for image_id in candidates:
+            if current_counts[category_id] >= target:
+                break
+            if image_id in selected_image_ids:
+                continue
+            counts = image_counts.get(image_id, Counter())
+            if (
+                category_id in dominant_categories
+                and current_counts[category_id] + counts.get(category_id, 0)
+                > dominant_max_counts[category_id]
+            ):
+                continue
+            selected_image_ids.add(image_id)
+            current_counts.update(counts)
+
+    balanced = _filter_coco_to_image_ids(premade, selected_image_ids)
+    selected_counts = instance_count_per_class(balanced)
+    selected_counter = Counter({int(k): int(v) for k, v in selected_counts.items()})
+    reached_targets = sum(
+        1
+        for category_id, target in per_class_targets.items()
+        if selected_counter[category_id] >= target
+    )
+    meta = {
+        "enabled": True,
+        "target_strategy": str(cfg_get(balance_cfg, "target_strategy", "min_count_multiplier")),
+        "target_instances_per_class": int(target_instances),
+        "dominant_class_ids": sorted(dominant_categories),
+        "dominant_max_overshoot_ratio": float(dominant_overshoot_ratio),
+        "input_images": len(premade.get("images", [])),
+        "input_annotations": len(premade.get("annotations", [])),
+        "output_images": len(balanced.get("images", [])),
+        "output_annotations": len(balanced.get("annotations", [])),
+        "classes_reaching_target": int(reached_targets),
+        "classes_with_instances": len(pool_counts),
+        "input_top_classes": _top_class_counts(pool_counts),
+        "output_top_classes": _top_class_counts(selected_counter),
+    }
+    return balanced, meta
 
 
 def _init_premade_worker(
@@ -1026,6 +1234,11 @@ def _build_copy_paste_premade_subset(
         "annotations": premade_annotations,
         "categories": subset.get("categories", []),
     }
+    generated_images = len(premade.get("images", []))
+    generated_annotations = len(premade.get("annotations", []))
+    balance_meta = None
+    if _balance_enabled_for_method(method, premade_cfg):
+        premade, balance_meta = _balance_premade_subset(premade, premade_cfg, seed)
     ann_path = variant_dir / "annotations.json"
     save_coco_json(premade, ann_path)
     selection_meta = {
@@ -1035,6 +1248,8 @@ def _build_copy_paste_premade_subset(
         "added_images": int(added_images),
         "base_images": len(subset.get("images", [])),
         "base_annotations": len(subset.get("annotations", [])),
+        "generated_images": int(generated_images),
+        "generated_annotations": int(generated_annotations),
         "output_images": len(premade.get("images", [])),
         "output_annotations": len(premade.get("annotations", [])),
         "added_annotations": len(premade.get("annotations", []))
@@ -1042,6 +1257,8 @@ def _build_copy_paste_premade_subset(
         "copy_paste_config": method_cfg,
         "num_workers": _premade_num_workers(premade_cfg, method_cfg),
     }
+    if balance_meta is not None:
+        selection_meta["balance"] = balance_meta
     metadata = _save_premade_metadata(
         premade=premade,
         before=subset,

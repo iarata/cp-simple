@@ -7,7 +7,7 @@
 3. PCTNet-style copy-paste harmonization,
 4. LBM-style copy-paste harmonization.
 
-The baseline is intentionally simple: a small DETR-style instance segmenter with a CNN backbone, transformer encoder/decoder, fixed object queries, class/box heads, and a query-conditioned mask head. Premade experiment configs use a small timm-backed DETR variant with an ImageNet-pretrained ResNet-18 visual encoder. EfficientNet-style timm backbones are also available through the same adapter. It is designed for controlled augmentation experiments, not for state-of-the-art COCO results.
+The baseline is intentionally simple: a small DETR-style instance segmenter with a CNN backbone, transformer encoder/decoder, fixed object queries, class/box heads, and a query-conditioned mask head. Premade experiment configs use a small timm-backed DETR variant with an ImageNet-pretrained ResNet-18 visual encoder. EfficientNet-style timm backbones are also available through the same adapter. YOLO26 instance-segmentation variants are available as raw, unpretrained Ultralytics YAML architectures for larger-from-scratch runs.
 
 ## Design notes
 
@@ -100,7 +100,7 @@ uv run python -m cps.cli make-premade-subsets --config-name subset \
   subset.premade.rare_quantile=0.25
 ```
 
-Premade datasets are written under each subset directory grouped by target policy, for example `premade/all_images/simple_copy_paste`, `premade/random_050pct/simple_copy_paste`, or `premade/underrepresented_q025/simple_copy_paste`. Copy-paste variants keep every original image and add one augmented copy for each image where copy-paste succeeds; set `subset.premade.append_augmented=false` to use the older replace-in-place behavior. Each variant writes before/after count, relative-frequency, and delta plots under `visualizations/`. `subset.premade.num_workers=0` uses an automatic worker count capped at 8, or one worker when `harmonizer_backend=libcom`; set it to `1` for sequential debugging or to an explicit worker count for your machine. Train from one of them with online augmentation disabled:
+Premade datasets are written under each subset directory grouped by target policy, for example `premade/all_images/simple_copy_paste`, `premade/random_050pct/simple_copy_paste`, or `premade/underrepresented_q025/simple_copy_paste`. Copy-paste variants keep every original image and add one augmented copy for each image where copy-paste succeeds; set `subset.premade.append_augmented=false` to use the older replace-in-place behavior. Copy-paste variants are balanced by default after generation: the final training JSON greedily keeps images that fill rare classes while downsampling images dominated by overrepresented classes such as `person`. The `none` premade variant remains an unbalanced baseline. Tune this with `subset.premade.balance.target_instances_per_class=300`, `subset.premade.balance.dominant_class_ids='[1]'`, `subset.premade.balance.dominant_top_k=2`, or disable it with `subset.premade.balance.enabled=false`. Each variant writes before/after count, relative-frequency, and delta plots under `visualizations/`. `subset.premade.num_workers=0` uses an automatic worker count capped at 8, or one worker when `harmonizer_backend=libcom`; set it to `1` for sequential debugging or to an explicit worker count for your machine. Train from one of them with online augmentation disabled:
 
 ```bash
 uv run python -m cps.cli train --config-name train \
@@ -157,6 +157,18 @@ Any timm feature backbone can be tried by overriding the model name directly,
 for example `model=detr_timm_efficientnet_b0 model.backbone_name=efficientnet_b1`
 or `model=detr_timm_efficientnet_b0 model.backbone_name=efficientnetv2_rw_s`.
 
+YOLO26 instance segmentation can be selected on any train config with
+`model=yolo26n`, `model=yolo26s`, or `model=yolo26m`. These configs build
+`yolo26*-seg.yaml` architectures and reject `.pt` weights so training starts
+from random initialization:
+
+```bash
+uv run python -m cps.cli train --config-name train_premade/none_online_normal \
+  wandb.enabled=true wandb.project=cps-copy-paste wandb.mode=online \
+  train.device=cuda eval.batch_size=128 train.batch_size=256 \
+  train.num_workers=12 train.epochs=100 model=yolo26n
+```
+
 Checkpoints and config snapshots are saved under `models/runs/<method>_<subset>_seed_<seed>/` by default.
 
 Large server runs with many workers and large batches use
@@ -181,8 +193,10 @@ Lightweight W&B probe validation runs every epoch by default
 (`eval.fast_eval.every=1`) without COCOeval. It logs six fixed samples: three
 normal validation images without copy-paste and three underrepresented-class
 validation images with probe-only Simple Copy-Paste applied, including GT,
-prediction, and decoder attention overlays. Set `eval.fast_eval.enabled=false`
-or `eval.fast_eval.every=0` to disable this probe path while keeping final mAP.
+prediction, and decoder attention overlays when the model exposes DETR decoder
+attention. YOLO26 runs log the same GT/prediction probe images without attention
+overlays. Set `eval.fast_eval.enabled=false` or `eval.fast_eval.every=0` to
+disable this probe path while keeping final mAP.
 
 ## Evaluate a checkpoint
 
@@ -234,13 +248,14 @@ uv run python -m cps.cli train --config-name train \
   wandb.enabled=true wandb.project=cps-copy-paste wandb.mode=online
 ```
 
-Training logs every configured train step's loss components (`train/loss_ce`,
-`train/loss_bbox`, `train/loss_giou`, `train/loss_mask`, `train/loss_dice`,
-and total `train/loss`), validation loss components, segmentation and bbox COCO
-metrics including `val/bbox_mAP`, W&B COCO summary/per-class AP plots, and saved
-validation PNGs such as GT-vs-pred grids and attention maps. Use
-`wandb.mode=offline` for air-gapped runs. Set `wandb.max_visualizations=0` to
-skip image uploads.
+Training logs every configured train step's model-native loss components and
+total `train/loss`. DETR logs `loss_ce`, `loss_bbox`, `loss_giou`, `loss_mask`,
+and `loss_dice`; YOLO26 logs `loss_box`, `loss_seg`, `loss_cls`, `loss_dfl`, and
+`loss_sem`. Validation loss components, segmentation and bbox COCO metrics
+including `val/bbox_mAP`, W&B COCO summary/per-class AP plots, and saved
+validation PNGs such as GT-vs-pred grids are also logged. Use
+`wandb.mode=offline` for air-gapped runs. Set `wandb.max_visualizations=0` to skip
+image uploads.
 
 ## Shortcut-learning analysis
 

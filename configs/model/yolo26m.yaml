@@ -1,0 +1,12 @@
+name: yolo26m
+family: yolo26
+task: segment
+size: m
+architecture: yolo26m-seg.yaml
+pretrained: false
+overlap_mask: false
+box: 7.5
+cls: 0.5
+dfl: 1.5
+verbose: false
+stride_multiple: 32

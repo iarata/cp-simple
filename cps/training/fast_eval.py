@@ -30,7 +30,7 @@ from cps.augmentations.simple_copy_paste import SimpleCopyPasteAugmentation
 from cps.data.coco import COCODataset, sample_to_torch
 from cps.data.stats import underrepresented_classes
 from cps.data.visualization import overlay_instances
-from cps.models.detr import outputs_to_predictions
+from cps.models import outputs_to_predictions
 
 ProbeSample = tuple[torch.Tensor, dict[str, Any], str]  # (image, target, label)
 
