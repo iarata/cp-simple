@@ -119,10 +119,21 @@ def validation_loop(
                     )
                 predictions.extend(chunk_predictions)
                 if saved_viz < visualize_batches:
+                    viz_predictions = chunk_predictions
+                    if compute_predictions and _uses_resized_inputs(target_chunk):
+                        viz_predictions = outputs_to_predictions(
+                            outputs,
+                            target_chunk,
+                            label_to_cat_id=label_to_cat_id,
+                            score_threshold=score_threshold,
+                            max_detections=max_detections,
+                            include_masks=include_prediction_masks,
+                            target_size_key="size",
+                        )
                     save_validation_grid(
                         images=image_chunk,
                         targets=target_chunk,
-                        predictions=chunk_predictions,
+                        predictions=viz_predictions,
                         categories=categories,
                         output_path=viz_dir / f"gt_vs_pred_{batches:04d}_{chunk_start:03d}.png",
                         max_images=visualize_max_images,
@@ -287,6 +298,13 @@ def log_cuda_validation_memory(device: torch.device) -> None:
     )
 
 
+def _uses_resized_inputs(targets: list[dict[str, Any]]) -> bool:
+    for target in targets:
+        if not torch.equal(target["size"].detach().cpu(), target["orig_size"].detach().cpu()):
+            return True
+    return False
+
+
 def save_validation_grid(
     images: list[torch.Tensor],
     targets: list[dict[str, Any]],
@@ -304,7 +322,7 @@ def save_validation_grid(
     if max_images is not None:
         image_targets = image_targets[: max(0, int(max_images))]
     for image, target in image_targets:
-        height, width = [int(v) for v in target["orig_size"].detach().cpu().tolist()]
+        height, width = [int(v) for v in target["size"].detach().cpu().tolist()]
         arr = (image[:, :height, :width].detach().cpu().numpy().transpose(1, 2, 0) * 255).clip(
             0, 255
         )

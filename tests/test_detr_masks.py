@@ -171,6 +171,33 @@ class DETRMaskMemoryTest(unittest.TestCase):
         self.assertEqual(len(predictions), 1)
         self.assertNotIn("mask", predictions[0])
 
+    def test_outputs_to_predictions_can_use_model_input_size_for_visualizations(self) -> None:
+        outputs = {
+            "pred_logits": torch.tensor([[[0.0, 7.0, 0.0]]]),
+            "pred_boxes": torch.tensor([[[0.5, 0.5, 1.0, 1.0]]]),
+            "pred_masks": torch.ones((1, 1, 2, 2)),
+        }
+        targets = [
+            {
+                "orig_size": torch.tensor([80, 120]),
+                "size": torch.tensor([8, 12]),
+                "image_id": torch.tensor([123]),
+            }
+        ]
+
+        metric_predictions = outputs_to_predictions(outputs, targets, label_to_cat_id={1: 10})
+        viz_predictions = outputs_to_predictions(
+            outputs,
+            targets,
+            label_to_cat_id={1: 10},
+            target_size_key="size",
+        )
+
+        self.assertEqual(metric_predictions[0]["mask"].shape, (80, 120))
+        self.assertEqual(viz_predictions[0]["mask"].shape, (8, 12))
+        self.assertEqual(metric_predictions[0]["bbox_xyxy"], [0.0, 0.0, 120.0, 80.0])
+        self.assertEqual(viz_predictions[0]["bbox_xyxy"], [0.0, 0.0, 12.0, 8.0])
+
 
 if __name__ == "__main__":
     unittest.main()

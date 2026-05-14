@@ -99,6 +99,45 @@ def segmentation_to_mask(
     return mask
 
 
+def _resize_sample(
+    image: np.ndarray, instances: list[dict[str, Any]], target_size: int
+) -> tuple[np.ndarray, list[dict[str, Any]], int, int]:
+    """Resize image and per-instance masks to ``(target_size, target_size)``.
+
+    Memory matters more than aspect ratio here: target masks live at the image
+    resolution until the loss downsamples them, so capping the image side caps
+    every downstream tensor (input, mask targets, padding) by a fixed budget.
+    """
+
+    height, width = image.shape[:2]
+    if height == target_size and width == target_size:
+        return image, instances, height, width
+    pil = Image.fromarray(image)
+    resized = np.asarray(pil.resize((target_size, target_size), Image.BILINEAR), dtype=np.uint8)
+    new_instances: list[dict[str, Any]] = []
+    for inst in instances:
+        mask = np.asarray(inst["mask"], dtype=bool)
+        if mask.sum() == 0:
+            continue
+        mask_pil = Image.fromarray(mask.astype(np.uint8) * 255, mode="L")
+        mask_resized = (
+            np.asarray(mask_pil.resize((target_size, target_size), Image.NEAREST)) > 127
+        )
+        if not mask_resized.any():
+            continue
+        bbox = mask_to_bbox_xyxy(mask_resized)
+        if bbox is None:
+            continue
+        updated = dict(inst)
+        updated["mask"] = mask_resized
+        updated["bbox_xyxy"] = bbox
+        updated["bbox"] = bbox
+        updated["bbox_mode"] = "xyxy"
+        updated["area"] = float(mask_resized.sum())
+        new_instances.append(updated)
+    return resized, new_instances, target_size, target_size
+
+
 def annotation_to_instance(ann: dict[str, Any], height: int, width: int) -> dict[str, Any] | None:
     bbox_xywh = [float(v) for v in ann.get("bbox", [0, 0, 0, 0])]
     mask = segmentation_to_mask(ann.get("segmentation"), height, width, bbox_xywh)
@@ -185,6 +224,7 @@ class COCODataset:
         augmentation: AugmentationFn | None = None,
         seed: int = 0,
         max_images: int | None = None,
+        image_size: int | None = None,
     ) -> None:
         self.image_dir = project_path(image_dir)
         self.annotation_json = project_path(annotation_json)
@@ -197,6 +237,7 @@ class COCODataset:
         self.augmentation = augmentation
         self.seed = int(seed)
         self.epoch = 0
+        self.image_size = int(image_size) if image_size else None
 
     @property
     def num_classes(self) -> int:
@@ -224,17 +265,24 @@ class COCODataset:
         image_info = self.images[int(index) % len(self.images)]
         image = self.load_image(image_info)
         height, width = image.shape[:2]
+        orig_height, orig_width = height, width
         instances = []
         for ann in self.anns_by_image.get(int(image_info["id"]), []):
             inst = annotation_to_instance(ann, height, width)
             if inst is not None:
                 instances.append(inst)
+        if self.image_size is not None:
+            image, instances, height, width = _resize_sample(
+                image, instances, self.image_size
+            )
         return {
             "image": image,
             "instances": instances,
             "image_info": dict(image_info),
             "height": height,
             "width": width,
+            "orig_height": orig_height,
+            "orig_width": orig_width,
             "augmentation_meta": {"method": "none"},
         }
 
@@ -251,6 +299,8 @@ def sample_to_torch(sample: Sample, cat_id_to_label: dict[int, int]):
 
     image = np.asarray(sample["image"], dtype=np.uint8)
     height, width = image.shape[:2]
+    orig_height = int(sample.get("orig_height", height))
+    orig_width = int(sample.get("orig_width", width))
     image_tensor = torch.as_tensor(image.transpose(2, 0, 1).copy(), dtype=torch.float32) / 255.0
     instances = sample.get("instances", [])
     boxes = []
@@ -281,14 +331,17 @@ def sample_to_torch(sample: Sample, cat_id_to_label: dict[int, int]):
         boxes_t = torch.as_tensor(boxes, dtype=torch.float32)
         labels_t = torch.as_tensor(labels, dtype=torch.int64)
         category_ids_t = torch.as_tensor(category_ids, dtype=torch.int64)
-        masks_t = torch.as_tensor(np.stack(masks, axis=0), dtype=torch.float32)
+        # uint8 vs float32: 4x smaller mask transfer/host RAM. The matcher and
+        # loss cast to float after downsampling so this only changes the wire
+        # format between dataloader workers and the model.
+        masks_t = torch.as_tensor(np.stack(masks, axis=0), dtype=torch.uint8)
         areas_t = torch.as_tensor(areas, dtype=torch.float32)
         iscrowd_t = torch.as_tensor(iscrowd, dtype=torch.int64)
     else:
         boxes_t = torch.zeros((0, 4), dtype=torch.float32)
         labels_t = torch.zeros((0,), dtype=torch.int64)
         category_ids_t = torch.zeros((0,), dtype=torch.int64)
-        masks_t = torch.zeros((0, height, width), dtype=torch.float32)
+        masks_t = torch.zeros((0, height, width), dtype=torch.uint8)
         areas_t = torch.zeros((0,), dtype=torch.float32)
         iscrowd_t = torch.zeros((0,), dtype=torch.int64)
     image_id = int(sample.get("image_info", {}).get("id", 0))
@@ -300,7 +353,7 @@ def sample_to_torch(sample: Sample, cat_id_to_label: dict[int, int]):
         "area": areas_t,
         "iscrowd": iscrowd_t,
         "image_id": torch.tensor([image_id], dtype=torch.int64),
-        "orig_size": torch.tensor([height, width], dtype=torch.int64),
+        "orig_size": torch.tensor([orig_height, orig_width], dtype=torch.int64),
         "size": torch.tensor([height, width], dtype=torch.int64),
         "augmentation_meta": sample.get("augmentation_meta", {}),
     }

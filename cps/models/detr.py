@@ -311,6 +311,15 @@ class TinyDETRSegmenter(nn.Module):
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         self.mask_embed = MLP(hidden_dim, hidden_dim, hidden_dim, 3)
         self.mask_feature_proj = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1)
+        # Bias the classifier so the initial softmax matches the empirical class
+        # prior (mostly background). Without this the first hundreds of iterations
+        # are wasted learning to predict "no object" against random logits.
+        with torch.no_grad():
+            self.class_embed.bias.zero_()
+            background_prior = 1.0 - 1.0 / float(num_classes + 1)
+            self.class_embed.bias[0] = float(
+                torch.log(torch.tensor(background_prior / (1 - background_prior)))
+            )
 
     def attention_layer_index(self) -> int:
         layer = str(self.config.attention_layer).strip().lower()
@@ -608,9 +617,12 @@ class DETRCriterion(nn.Module):
 def resize_masks_for_loss(
     pred_masks: torch.Tensor, target_masks: torch.Tensor, max_size: int = 128
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Resize predicted and target masks to a bounded size for memory-conscious losses."""
+    """Resize predicted and target masks to a bounded size for memory-conscious losses.
 
-    target_masks = target_masks.float()
+    Targets come in as uint8 from the dataloader; we downsample at uint8 (much
+    smaller transfer) and only cast to float once at the reduced resolution.
+    """
+
     height, width = pred_masks.shape[-2:]
     if max(height, width) > max_size > 0:
         scale = max_size / float(max(height, width))
@@ -625,6 +637,7 @@ def resize_masks_for_loss(
         )[:, 0]
     if target_masks.shape[-2:] != size:
         target_masks = F.interpolate(target_masks[:, None], size=size, mode="nearest")[:, 0]
+    target_masks = target_masks.float()
     return pred_masks, target_masks
 
 
@@ -655,6 +668,7 @@ def outputs_to_predictions(
     max_detections: int = 100,
     mask_threshold: float = 0.5,
     include_masks: bool = True,
+    target_size_key: str = "orig_size",
 ) -> list[dict[str, Any]]:
     prob = outputs["pred_logits"].softmax(-1)
     scores, labels = prob[..., 1:].max(-1)
@@ -663,7 +677,8 @@ def outputs_to_predictions(
     masks = outputs["pred_masks"].sigmoid() if include_masks else None
     predictions: list[dict[str, Any]] = []
     for batch_idx, target in enumerate(targets):
-        height, width = [int(v) for v in target["orig_size"].tolist()]
+        size_tensor = target.get(target_size_key, target["orig_size"])
+        height, width = [int(v) for v in size_tensor.tolist()]
         image_id = int(target["image_id"].item())
         keep = scores[batch_idx] >= score_threshold
         if keep.sum() == 0:

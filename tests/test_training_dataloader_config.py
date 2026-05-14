@@ -80,6 +80,16 @@ class TrainingDataLoaderConfigTest(unittest.TestCase):
 
         set_strategy.assert_called_once_with("file_system")
 
+    def test_full_validation_runs_only_at_final_epoch_when_eval_every_zero(self) -> None:
+        decisions = [train._should_run_full_validation(epoch, 4, 0) for epoch in range(4)]
+
+        self.assertEqual(decisions, [False, False, False, True])
+
+    def test_full_validation_can_still_run_periodically_when_requested(self) -> None:
+        decisions = [train._should_run_full_validation(epoch, 4, 2) for epoch in range(4)]
+
+        self.assertEqual(decisions, [False, True, False, True])
+
 
 if __name__ == "__main__":
     unittest.main()

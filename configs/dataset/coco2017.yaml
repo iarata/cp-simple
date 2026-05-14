@@ -5,3 +5,8 @@ val_images: ${dataset.root}/val2017
 train_annotations: ${dataset.root}/annotations/instances_train2017.json
 val_annotations: ${dataset.root}/annotations/instances_val2017.json
 subset_root: data.nosync/processed/coco_subsets
+# Square-resize at load time. Caps the input tensor, padding from
+# `nested_tensor_from_tensor_list`, and per-instance target masks to a fixed
+# budget per image — the single biggest VRAM lever for batch-124 training.
+# Set to null to keep native (variable) resolution.
+image_size: 512

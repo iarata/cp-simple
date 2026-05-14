@@ -19,6 +19,7 @@ from cps.data.subsets import percent_slug, premade_train_paths, premade_train_va
 from cps.models.detr import build_model_and_criterion
 from cps.paths import project_path
 from cps.training.checkpoints import load_checkpoint, save_checkpoint
+from cps.training.fast_eval import ProbeSet, build_probe_set, run_fast_validation
 from cps.training.validate import move_targets_to_device, validation_loop
 from cps.utils.device import device_info, get_device
 from cps.utils.seed import seed_everything
@@ -120,12 +121,14 @@ def resolve_train_paths(cfg: Any) -> tuple[Path, Path]:
 
 def build_datasets(cfg: Any) -> tuple[COCODataset, COCODataset]:
     train_images, train_annotations = resolve_train_paths(cfg)
+    image_size = getattr(cfg.dataset, "image_size", None)
     train_dataset = COCODataset(
         image_dir=train_images,
         annotation_json=train_annotations,
         augmentation=None,
         seed=int(cfg.train.seed),
         max_images=getattr(cfg.train, "max_train_images", None),
+        image_size=image_size,
     )
     premade_variant = premade_train_variant(cfg.subset)
     if premade_variant and str(getattr(cfg.augmentation, "name", "none")) != "none":
@@ -149,6 +152,7 @@ def build_datasets(cfg: Any) -> tuple[COCODataset, COCODataset]:
         augmentation=None,
         seed=int(cfg.train.seed),
         max_images=getattr(cfg.train, "max_val_images", None),
+        image_size=image_size,
     )
     return train_dataset, val_dataset
 
@@ -169,6 +173,106 @@ def build_dataloaders(cfg: Any) -> tuple[DataLoader, DataLoader, COCODataset, CO
     train_loader = DataLoader(train_dataset, **train_kwargs)
     val_loader = DataLoader(val_dataset, **val_kwargs)
     return train_loader, val_loader, train_dataset, val_dataset
+
+
+def build_optimizer(model: torch.nn.Module, cfg: Any) -> torch.optim.Optimizer:
+    """Build AdamW with a lower LR group for the pretrained backbone.
+
+    Without this, a pretrained backbone (timm) is destroyed at the head's LR
+    in the first epoch, exactly the symptom of "loss decreases very slowly."
+    """
+
+    base_lr = float(cfg.train.lr)
+    weight_decay = float(cfg.train.weight_decay)
+    backbone_lr_cfg = getattr(cfg.train, "backbone_lr", None)
+    backbone_lr = float(backbone_lr_cfg) if backbone_lr_cfg is not None else base_lr
+    backbone_params: list[torch.nn.Parameter] = []
+    head_params: list[torch.nn.Parameter] = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if name.startswith("backbone."):
+            backbone_params.append(param)
+        else:
+            head_params.append(param)
+    param_groups = [{"params": head_params, "lr": base_lr}]
+    if backbone_params:
+        param_groups.append({"params": backbone_params, "lr": backbone_lr})
+    logger.info(
+        "Optimizer LR groups - head: {} ({} params), backbone: {} ({} params)",
+        base_lr,
+        sum(p.numel() for p in head_params),
+        backbone_lr,
+        sum(p.numel() for p in backbone_params),
+    )
+    return torch.optim.AdamW(param_groups, lr=base_lr, weight_decay=weight_decay)
+
+
+def _build_probe_set_if_enabled(
+    cfg: Any, train_dataset: COCODataset, val_dataset: COCODataset
+) -> ProbeSet | None:
+    """Build the fixed 6-sample probe set unless the user disables it."""
+
+    fast_cfg = getattr(cfg.eval, "fast_eval", None)
+    enabled = True
+    if fast_cfg is not None:
+        enabled = bool(getattr(fast_cfg, "enabled", True))
+    if not enabled:
+        return None
+    num_normal = int(getattr(fast_cfg, "num_normal", 3)) if fast_cfg is not None else 3
+    num_rare = int(getattr(fast_cfg, "num_underrepresented", 3)) if fast_cfg is not None else 3
+    probe_seed = (
+        int(getattr(fast_cfg, "probe_seed", cfg.train.seed))
+        if fast_cfg is not None
+        else int(cfg.train.seed)
+    )
+    quantile = (
+        float(getattr(fast_cfg, "underrepresented_quantile", 0.25))
+        if fast_cfg is not None
+        else 0.25
+    )
+    max_paste_objects = (
+        int(getattr(fast_cfg, "max_paste_objects", 2)) if fast_cfg is not None else 2
+    )
+    try:
+        return build_probe_set(
+            val_dataset=val_dataset,
+            train_dataset=train_dataset,
+            num_normal=num_normal,
+            num_underrepresented=num_rare,
+            seed=probe_seed,
+            quantile=quantile,
+            max_paste_objects=max_paste_objects,
+        )
+    except Exception as exc:  # pragma: no cover - never break training on probe issues
+        logger.warning("Fast-eval probe set build failed; disabling: {}", exc)
+        return None
+
+
+def _fast_eval_every(cfg: Any) -> int:
+    fast_cfg = getattr(cfg.eval, "fast_eval", None)
+    if fast_cfg is not None:
+        return int(getattr(fast_cfg, "every", 1) or 0)
+    return int(getattr(cfg.eval, "fast_eval_every", 1) or 0)
+
+
+def _fast_eval_score_threshold(cfg: Any) -> float:
+    fast_cfg = getattr(cfg.eval, "fast_eval", None)
+    if fast_cfg is not None:
+        return float(getattr(fast_cfg, "score_threshold", cfg.eval.score_threshold))
+    return float(getattr(cfg.eval, "score_threshold", 0.05))
+
+
+def _fast_eval_max_detections(cfg: Any) -> int:
+    fast_cfg = getattr(cfg.eval, "fast_eval", None)
+    if fast_cfg is not None:
+        return int(getattr(fast_cfg, "max_detections", 20))
+    return 20
+
+
+def _should_run_full_validation(epoch: int, total_epochs: int, eval_every: int) -> bool:
+    is_final_epoch = epoch == total_epochs - 1
+    return is_final_epoch or (eval_every > 0 and (epoch + 1) % eval_every == 0)
 
 
 def validation_checkpoint_score(metrics: dict[str, Any]) -> float:
@@ -202,9 +306,7 @@ def run_training(cfg: Any) -> dict[str, Any]:
     model, criterion = build_model_and_criterion(cfg.model, num_classes=train_dataset.num_classes)
     model.to(device)
     criterion.to(device)
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=float(cfg.train.lr), weight_decay=float(cfg.train.weight_decay)
-    )
+    optimizer = build_optimizer(model, cfg)
     start_epoch = 0
     if getattr(cfg.train, "resume", None):
         payload = load_checkpoint(cfg.train.resume, model, optimizer, map_location=device)
@@ -215,6 +317,12 @@ def run_training(cfg: Any) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / "config.json").open("w", encoding="utf-8") as f:
         json.dump(OmegaConf.to_container(cfg, resolve=True), f, indent=2)
+    fast_eval_every = _fast_eval_every(cfg)
+    probe = (
+        _build_probe_set_if_enabled(cfg, train_dataset, val_dataset)
+        if fast_eval_every > 0
+        else None
+    )
     metrics: dict[str, Any] = {}
     best_score = float("-inf")
     for epoch in range(start_epoch, int(cfg.train.epochs)):
@@ -231,7 +339,20 @@ def run_training(cfg: Any) -> dict[str, Any]:
         )
         metrics = {"train": train_metrics, "epoch": epoch}
         is_final_epoch = epoch == int(cfg.train.epochs) - 1
-        should_eval = is_final_epoch or (eval_every > 0 and (epoch + 1) % eval_every == 0)
+        if probe is not None and fast_eval_every > 0 and (epoch + 1) % fast_eval_every == 0:
+            try:
+                run_fast_validation(
+                    model=model,
+                    probe=probe,
+                    device=device,
+                    run=run,
+                    epoch=epoch,
+                    score_threshold=_fast_eval_score_threshold(cfg),
+                    max_detections=_fast_eval_max_detections(cfg),
+                )
+            except Exception as exc:  # pragma: no cover - W&B/media failures are non-fatal
+                logger.warning("Fast validation failed at epoch {}; continuing: {}", epoch, exc)
+        should_eval = _should_run_full_validation(epoch, int(cfg.train.epochs), eval_every)
         if should_eval:
             val_dir_name = (
                 f"final_eval_epoch_{epoch:03d}" if is_final_epoch else f"val_epoch_{epoch:03d}"
@@ -288,6 +409,27 @@ def run_training(cfg: Any) -> dict[str, Any]:
     return {"output_dir": str(output_dir), "metrics": metrics}
 
 
+def _amp_dtype(cfg: Any, device: torch.device) -> torch.dtype | None:
+    """Resolve mixed-precision dtype. Returns None if AMP is disabled."""
+
+    if device.type != "cuda":
+        return None
+    amp_cfg = getattr(cfg.train, "amp", None)
+    if amp_cfg is None or amp_cfg is False or str(amp_cfg).lower() in {"false", "off", "none"}:
+        return None
+    if amp_cfg is True or str(amp_cfg).lower() in {"true", "on", "auto", "bfloat16", "bf16"}:
+        return torch.bfloat16
+    if str(amp_cfg).lower() in {"fp16", "float16", "half"}:
+        return torch.float16
+    raise ValueError(f"Unknown train.amp={amp_cfg!r}; use true/false/bfloat16/float16.")
+
+
+def _warmup_factor(step: int, warmup_steps: int) -> float:
+    if warmup_steps <= 0 or step >= warmup_steps:
+        return 1.0
+    return float(step + 1) / float(warmup_steps)
+
+
 def train_one_epoch(
     model: torch.nn.Module,
     criterion: torch.nn.Module,
@@ -300,38 +442,84 @@ def train_one_epoch(
 ) -> dict[str, float]:
     model.train()
     criterion.train()
-    loss_sums: dict[str, float] = {}
+    amp_dtype = _amp_dtype(cfg, device)
+    use_grad_scaler = amp_dtype == torch.float16
+    grad_scaler = torch.amp.GradScaler("cuda") if use_grad_scaler else None
+    warmup_steps = int(getattr(cfg.train, "warmup_steps", 0) or 0)
+    base_lrs = [group["lr"] for group in optimizer.param_groups]
+    log_every = max(int(cfg.train.log_every), 1)
+    loss_sums_gpu: dict[str, torch.Tensor] = {}
     num_batches = 0
     progress = tqdm(data_loader, desc=f"train epoch {epoch}", leave=False)
+    last_logged_losses: dict[str, float] = {}
+    steps_per_epoch = len(data_loader)
     for step, (images, targets) in enumerate(progress):
-        images = [img.to(device) for img in images]
+        global_step = epoch * steps_per_epoch + step
+        if warmup_steps > 0:
+            factor = _warmup_factor(global_step, warmup_steps)
+            for group, base_lr in zip(optimizer.param_groups, base_lrs, strict=False):
+                group["lr"] = base_lr * factor
+        images = [img.to(device, non_blocking=True) for img in images]
         targets = move_targets_to_device(targets, device)
-        outputs = model(images)
-        losses = criterion(outputs, targets)
-        loss = losses["loss"]
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        if float(cfg.train.gradient_clip_norm) > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg.train.gradient_clip_norm))
-        optimizer.step()
+        if amp_dtype is not None:
+            with torch.autocast(device_type="cuda", dtype=amp_dtype):
+                outputs = model(images)
+                losses = criterion(outputs, targets)
+            loss = losses["loss"]
+        else:
+            outputs = model(images)
+            losses = criterion(outputs, targets)
+            loss = losses["loss"]
+        if grad_scaler is not None:
+            grad_scaler.scale(loss).backward()
+            if float(cfg.train.gradient_clip_norm) > 0:
+                grad_scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), float(cfg.train.gradient_clip_norm)
+                )
+            grad_scaler.step(optimizer)
+            grad_scaler.update()
+        else:
+            loss.backward()
+            if float(cfg.train.gradient_clip_norm) > 0:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), float(cfg.train.gradient_clip_norm)
+                )
+            optimizer.step()
+        # Accumulate per-key losses on the GPU. Pulling values to CPU via .item()
+        # every step forces a host sync that single-handedly halves throughput
+        # on a fast GPU like the RTX PRO 6000. We only sync on log boundaries.
         for key, value in losses.items():
-            loss_sums[key] = loss_sums.get(key, 0.0) + float(value.detach().cpu())
+            detached = value.detach()
+            if key in loss_sums_gpu:
+                loss_sums_gpu[key] = loss_sums_gpu[key] + detached
+            else:
+                loss_sums_gpu[key] = detached.clone()
         num_batches += 1
-        progress.set_postfix(loss=float(loss.detach().cpu()))
-        global_step = epoch * len(data_loader) + step
-        if run and step % int(cfg.train.log_every) == 0:
-            payload = {
-                "train/lr": optimizer.param_groups[0]["lr"],
-                "epoch": epoch,
-                "step": global_step,
-            }
-            for key, value in losses.items():
-                payload[f"train/{key}"] = float(value.detach().cpu())
-            run.log(payload)
+        if step % log_every == 0:
+            payload_tensors = {key: value.detach() for key, value in losses.items()}
+            payload = {key: float(value.item()) for key, value in payload_tensors.items()}
+            last_logged_losses = payload
+            progress.set_postfix(loss=payload.get("loss", 0.0))
+            if run:
+                wandb_payload: dict[str, Any] = {
+                    "train/lr": optimizer.param_groups[0]["lr"],
+                    "epoch": epoch,
+                    "step": global_step,
+                }
+                for key, val in payload.items():
+                    wandb_payload[f"train/{key}"] = val
+                run.log(wandb_payload)
         max_batches = getattr(cfg.train, "max_train_batches", None)
         if max_batches is not None and step + 1 >= int(max_batches):
             break
-    return {key: value / max(num_batches, 1) for key, value in loss_sums.items()}
+    # Restore configured LRs so subsequent epochs see post-warmup values.
+    for group, base_lr in zip(optimizer.param_groups, base_lrs, strict=False):
+        group["lr"] = base_lr
+    if num_batches == 0:
+        return last_logged_losses
+    return {key: float((value / num_batches).item()) for key, value in loss_sums_gpu.items()}
 
 
 def experiment_output_dir(cfg: Any) -> Path:
@@ -363,6 +551,7 @@ def run_evaluation(cfg: Any) -> dict[str, Any]:
         augmentation=None,
         seed=int(cfg.train.seed),
         max_images=getattr(cfg.eval, "max_images", None),
+        image_size=getattr(cfg.dataset, "image_size", None),
     )
     val_loader = DataLoader(
         val_dataset,

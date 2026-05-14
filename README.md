@@ -177,6 +177,12 @@ for exact DETR validation loss with the CPU Hungarian matcher, or
 Validation clears unused CUDA cache by default after each validation pass; set
 `eval.empty_cache_between_chunks=true` for more aggressive cleanup on tight VRAM
 budgets.
+Lightweight W&B probe validation runs every epoch by default
+(`eval.fast_eval.every=1`) without COCOeval. It logs six fixed samples: three
+normal validation images without copy-paste and three underrepresented-class
+validation images with probe-only Simple Copy-Paste applied, including GT,
+prediction, and decoder attention overlays. Set `eval.fast_eval.enabled=false`
+or `eval.fast_eval.every=0` to disable this probe path while keeping final mAP.
 
 ## Evaluate a checkpoint
 

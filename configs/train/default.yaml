@@ -6,15 +6,18 @@ run_name: ""
 epochs: 12
 batch_size: 12
 num_workers: 8
-prefetch_factor: 1
+prefetch_factor: 4 # >1 keeps a queue of ready batches so the GPU never waits
 pin_memory: null # null enables pinning whenever CUDA is available
-persistent_workers: false
+persistent_workers: true # avoids re-spawning workers (and re-loading COCO json) each epoch
 multiprocessing_sharing_strategy: file_system # avoids DataLoader FD exhaustion on large batches
 num_threads: 0 # 0 keeps PyTorch default
 num_interop_threads: 0
 lr: 0.0001
+backbone_lr: 0.00001 # standard DETR ratio — pretrained backbones need a 10× lower LR
 weight_decay: 0.0001
 gradient_clip_norm: 0.1
+warmup_steps: 500
+amp: true # bf16 autocast on CUDA; halves activation memory and ~1.5–2× iter/s
 eval_every: 0 # 0 means run full evaluation only after the final epoch
 log_every: 10
 resume: null

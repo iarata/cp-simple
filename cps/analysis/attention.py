@@ -40,7 +40,7 @@ def save_decoder_attention_maps(
         attention = attention_for_top_query(outputs, batch_idx)
         if attention is None:
             continue
-        height, width = [int(v) for v in target["orig_size"].detach().cpu().tolist()]
+        height, width = [int(v) for v in target["size"].detach().cpu().tolist()]
         arr = (image[:, :height, :width].detach().cpu().numpy().transpose(1, 2, 0) * 255).clip(
             0, 255
         )

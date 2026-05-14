@@ -7,6 +7,16 @@ mode: full # full, bbox, loss, or gpu_loss
 iou_types: [segm, bbox]
 empty_cache: true
 empty_cache_between_chunks: false
+fast_eval:
+  enabled: true
+  every: 1 # lightweight W&B probe validation interval in epochs; 0 disables it
+  num_normal: 3
+  num_underrepresented: 3
+  underrepresented_quantile: 0.25
+  probe_seed: ${train.seed}
+  score_threshold: 0.05
+  max_detections: 20
+  max_paste_objects: 2
 score_threshold: 0.05
 max_detections: 100
 max_batches: null
