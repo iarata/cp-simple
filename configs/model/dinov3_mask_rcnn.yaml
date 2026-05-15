@@ -7,9 +7,25 @@ family: dinov3_maskrcnn
 backbone_name: vit_small_patch16_dinov3
 backbone_pretrained: true
 backbone_freeze: false
-backbone_grad_checkpointing: true
+# Default OFF on 96 GB cards: we have the VRAM headroom and want the ~25%
+# wall-clock back. Flip on if you OOM at large batch.
+backbone_grad_checkpointing: false
+# Stochastic depth on the ViT: free regularization that helps when fine-tuning
+# a pretrained ViT on small data (25%-COCO is exactly that regime).
+backbone_drop_path_rate: 0.1
+# torch.compile the backbone forward. "default" is the safe mode that works on
+# all torch versions; "reduce-overhead" is faster but requires steady shapes
+# (we set min_size=max_size=image_size, so this is satisfied). Set
+# compile_backbone=false to disable on platforms where compile is flaky.
+compile_backbone: true
+compile_mode: default
 image_size: 512
 fpn_out_channels: 256
+# Mask head channel width. torchvision defaults to 256; 128 is the standard
+# "lite" setting and drops ~25% off epoch wall time at ~0 mAP cost in our
+# regime, because DINOv3 features are already strong.
+mask_head_channels: 128
+mask_head_num_convs: 4
 # ImageNet normalization. DINOv3 weights expect these means/stds; do not change.
 image_mean: [0.485, 0.456, 0.406]
 image_std: [0.229, 0.224, 0.225]

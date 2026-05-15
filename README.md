@@ -169,6 +169,20 @@ uv run python -m cps.cli train --config-name train_premade/none_online_normal \
   train.num_workers=12 train.epochs=100 model=yolo26n
 ```
 
+DINOv3 Mask R-CNN is the fastest pretrained path for the 25% premade runs:
+
+```bash
+uv run python -m cps.cli train --config-name train_premade/simple_copy_paste \
+  train.device=cuda model=dinov3_mask_rcnn
+```
+
+The default DINOv3 config compiles only the ViT backbone, disables backbone
+gradient checkpointing, uses stochastic depth, and keeps the mask head at 128
+channels. On fixed-size CUDA training runs, `model.compile_mode=reduce-overhead`
+can be faster than the safer default compile mode. For a strength-only run,
+switch to the ViT-B/16 backbone with `model=dinov3_mask_rcnn_base`; expect it to
+be substantially slower than the small model.
+
 Checkpoints and config snapshots are saved under `models/runs/<method>_<subset>_seed_<seed>/` by default.
 
 Large server runs with many workers and large batches use
