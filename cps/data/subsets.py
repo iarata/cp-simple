@@ -1123,19 +1123,56 @@ def _build_none_premade_subset(
     image_mode = str(cfg_get(premade_cfg, "image_mode", "symlink"))
     if image_mode == "none":
         raise ValueError("subset.premade.image_mode must be symlink or copy for premade datasets.")
+    # Match the copy-paste variants: when ``append_augmented=False`` and a
+    # selection policy (e.g. ``target_images=underrepresented``) is active, the
+    # "none" baseline should be the SAME set of base images the copy-paste
+    # variants train on, just without paste. Otherwise epochs aren't
+    # comparable across variants (copy-paste = 4.3k underrepresented images,
+    # none = full 29.6k -> ~7x more steps per epoch). With ``append_augmented``
+    # left at its True default the full base subset is written, preserving the
+    # legacy meaning of "premade/none = the 25%-COCO sample".
+    append_augmented = bool(cfg_get(premade_cfg, "append_augmented", True))
+    selected_ids, selection_meta = _selected_premade_image_ids(subset, premade_cfg, seed)
+    if append_augmented:
+        emitted = subset
+        selection_meta = {**selection_meta, "filtered_to_selected": False}
+    else:
+        emitted = {
+            "info": subset.get("info", {}),
+            "licenses": subset.get("licenses", []),
+            "images": [img for img in subset.get("images", []) if int(img["id"]) in selected_ids],
+            "annotations": [
+                ann
+                for ann in subset.get("annotations", [])
+                if int(ann["image_id"]) in selected_ids
+            ],
+            "categories": subset.get("categories", []),
+        }
+        selection_meta = {
+            **selection_meta,
+            "filtered_to_selected": True,
+            "base_images": len(subset.get("images", [])),
+            "base_annotations": len(subset.get("annotations", [])),
+            "output_images": len(emitted["images"]),
+            "output_annotations": len(emitted["annotations"]),
+        }
     num_workers = _premade_num_workers(premade_cfg)
-    logger.info("Building premade none with {} worker(s).", num_workers)
+    logger.info(
+        "Building premade none with {} worker(s) ({} images).",
+        num_workers,
+        len(emitted.get("images", [])),
+    )
     _materialize_images_for_premade(
-        subset=subset,
+        subset=emitted,
         source_image_dir=source_image_dir,
         output_image_dir=image_dir,
         mode=image_mode,
         num_workers=num_workers,
     )
     ann_path = variant_dir / "annotations.json"
-    save_coco_json(subset, ann_path)
+    save_coco_json(emitted, ann_path)
     metadata = _save_premade_metadata(
-        premade=subset,
+        premade=emitted,
         before=None,
         full=full,
         percent=percent,
@@ -1144,8 +1181,8 @@ def _build_none_premade_subset(
         image_dir=image_dir,
         variant_dir=variant_dir,
         method=variant,
-        selection_meta={"target_images": "none"},
-        selected_count=0,
+        selection_meta=selection_meta,
+        selected_count=len(selected_ids),
         save_visualizations=bool(cfg_get(premade_cfg, "save_visualizations", True)),
         max_preview_images=int(cfg_get(premade_cfg, "max_preview_images", 16)),
     )
