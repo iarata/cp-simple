@@ -67,8 +67,8 @@ class DINOv3MaskRCNNConfig:
     # tree is unsafe because RPN/RoI ops have data-dependent shapes, so we
     # scope it to the fixed-shape ViT body only.
     compile_backbone: bool = True
-    compile_mode: str = "default"  # default | reduce-overhead | max-autotune
-    image_size: int = 512
+    compile_mode: str = "reduce-overhead"  # default | reduce-overhead | max-autotune
+    image_size: int = 256
     fpn_out_channels: int = 256
     # Channels for the 4-conv Mask R-CNN mask head (256 in torchvision's
     # default; 128 is the standard "lite" setting). The mask head dominates
@@ -76,7 +76,7 @@ class DINOv3MaskRCNNConfig:
     # features are strong enough that the extra capacity stops mattering
     # very early. Drops ~25% off epoch wall time at ~0 mAP cost in our regime.
     mask_head_channels: int = 128
-    mask_head_num_convs: int = 4
+    mask_head_num_convs: int = 2
     image_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
     image_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
     # Detection-head settings (memory-conscious defaults from the Swin model)
@@ -87,16 +87,16 @@ class DINOv3MaskRCNNConfig:
     box_positive_fraction: float = 0.25
     rpn_batch_size_per_image: int = 128
     rpn_positive_fraction: float = 0.5
-    rpn_pre_nms_top_n_train: int = 1000
+    rpn_pre_nms_top_n_train: int = 500
     rpn_pre_nms_top_n_test: int = 1000
-    rpn_post_nms_top_n_train: int = 1000
+    rpn_post_nms_top_n_train: int = 500
     rpn_post_nms_top_n_test: int = 1000
     anchor_sizes: tuple[tuple[int, ...], ...] = (
+        (16,),
         (32,),
         (64,),
         (128,),
         (256,),
-        (512,),
     )
     anchor_aspect_ratios: tuple[float, ...] = (0.5, 1.0, 2.0)
     # ViT block indices whose feature-norms are exposed as attention maps. The

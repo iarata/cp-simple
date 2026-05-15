@@ -60,9 +60,14 @@ class DINOv3MaskRCNNConfigTest(unittest.TestCase):
         self.assertFalse(model_cfg.backbone_grad_checkpointing)
         self.assertAlmostEqual(model_cfg.backbone_drop_path_rate, 0.1)
         self.assertTrue(model_cfg.compile_backbone)
-        self.assertEqual(model_cfg.compile_mode, "default")
+        self.assertEqual(model_cfg.compile_mode, "reduce-overhead")
+        self.assertEqual(model_cfg.image_size, 256)
         self.assertEqual(model_cfg.mask_head_channels, 128)
-        self.assertEqual(model_cfg.mask_head_num_convs, 4)
+        self.assertEqual(model_cfg.mask_head_num_convs, 2)
+        self.assertEqual(model_cfg.rpn_pre_nms_top_n_train, 500)
+        self.assertEqual(model_cfg.rpn_post_nms_top_n_train, 500)
+        self.assertEqual(model_cfg.anchor_sizes[0], (16,))
+        self.assertEqual(model_cfg.anchor_sizes[-1], (256,))
 
     def test_base_model_yaml_selects_stronger_backbone(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

@@ -3,15 +3,18 @@ defaults:
   - _self_
 
 # Training preset tuned for DINOv3-pretrained backbones. The pretrained
-# features are very strong, so the heads need less time and the backbone
-# needs *very* little fine-tuning — the LR ratio here is wider than the
-# Swin preset (head 2e-4 vs backbone 5e-6 ≈ 40×) on purpose.
+# features are very strong but at image_size=256 the positional embeddings
+# need to interpolate from the 224 pretraining grid, so the backbone wants
+# more fine-tuning than at 512 — backbone_lr=2e-5 (10× lower than head,
+# not 40×). Loss-plateau-at-1.0 at the earlier 5e-6 was the backbone being
+# effectively frozen.
 epochs: 36
 batch_size: 16
 lr: 0.0002
-backbone_lr: 0.000005  # 40× lower — DINOv3 features barely need tuning
+backbone_lr: 0.00002
 weight_decay: 0.0001
-warmup_steps: 500
+# ~470 steps/epoch on 25%-COCO @ bs=64; 200 steps ≈ first half of epoch 1
+warmup_steps: 200
 gradient_clip_norm: 1.0
 lr_schedule: cosine
 min_lr_ratio: 0.01

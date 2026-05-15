@@ -13,19 +13,25 @@ backbone_grad_checkpointing: false
 # Stochastic depth on the ViT: free regularization that helps when fine-tuning
 # a pretrained ViT on small data (25%-COCO is exactly that regime).
 backbone_drop_path_rate: 0.1
-# torch.compile the backbone forward. "default" is the safe mode that works on
-# all torch versions; "reduce-overhead" is faster but requires steady shapes
-# (we set min_size=max_size=image_size, so this is satisfied). Set
-# compile_backbone=false to disable on platforms where compile is flaky.
+# torch.compile the backbone forward. "reduce-overhead" uses CUDA graphs and
+# requires steady shapes (we set min_size=max_size=image_size, so the backbone
+# always sees [B, 3, image_size, image_size]). Fall back to "default" if your
+# torch build chokes on it; set compile_backbone=false to disable entirely.
 compile_backbone: true
-compile_mode: default
-image_size: 512
+compile_mode: reduce-overhead
+# Default 256 — matches the dataset.image_size we use on 25%-COCO. ViT-S/16
+# attention is quadratic in token count, so dropping from 512→256 input quarters
+# the per-step backbone cost. Bump back to 512 for full-COCO / quality runs.
+image_size: 256
 fpn_out_channels: 256
 # Mask head channel width. torchvision defaults to 256; 128 is the standard
 # "lite" setting and drops ~25% off epoch wall time at ~0 mAP cost in our
 # regime, because DINOv3 features are already strong.
 mask_head_channels: 128
-mask_head_num_convs: 4
+# 2 convs (not torchvision's default 4) — DINOv3 features carry most of the
+# segmentation signal already, and the mask head is the per-step cost driver
+# at high batch with many positive RoIs.
+mask_head_num_convs: 2
 # ImageNet normalization. DINOv3 weights expect these means/stds; do not change.
 image_mean: [0.485, 0.456, 0.406]
 image_std: [0.229, 0.224, 0.225]
@@ -38,12 +44,13 @@ box_batch_size_per_image: 128
 box_positive_fraction: 0.25
 rpn_batch_size_per_image: 128
 rpn_positive_fraction: 0.5
-rpn_pre_nms_top_n_train: 1000
+rpn_pre_nms_top_n_train: 500
 rpn_pre_nms_top_n_test: 1000
-rpn_post_nms_top_n_train: 1000
+rpn_post_nms_top_n_train: 500
 rpn_post_nms_top_n_test: 1000
-# 5-level FPN: ViTDet's Simple Feature Pyramid + LastLevelMaxPool.
-anchor_sizes: [[32], [64], [128], [256], [512]]
+# 5-level FPN: ViTDet's Simple Feature Pyramid + LastLevelMaxPool. Anchor
+# sizes scaled to image_size=256 (largest anchor ≈ full image).
+anchor_sizes: [[16], [32], [64], [128], [256]]
 anchor_aspect_ratios: [0.5, 1.0, 2.0]
 # Three depths whose feature-norm maps are logged each fast-eval cycle.
 # (0, 5, 11) = first / middle / last block for the 12-block ViT-S/16. Change
