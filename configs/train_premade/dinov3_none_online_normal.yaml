@@ -1,0 +1,31 @@
+# @package _global_
+
+defaults:
+  - /train_config
+  - override /model: dinov3_mask_rcnn
+  - override /train: dinov3
+  - override /augmentation: normal
+  - _self_
+
+subset:
+  percent: 25
+  seed: 1337
+  premade:
+    train_variant: underrepresented_q025/none
+
+augmentation:
+  use_albumentations: true
+  horizontal_flip_p: 0.5
+  brightness_limit: 0.2
+  contrast_limit: 0.2
+
+train:
+  run_name: premade_dinov3_none_online_normal_pct_025_seed_1337
+
+eval:
+  mode: full
+  visualize_batches: 2
+
+wandb:
+  group: premade_dinov3_pct_025_seed_1337
+  tags: [premade, dinov3, none, online-normal, pct-025]

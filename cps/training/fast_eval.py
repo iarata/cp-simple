@@ -24,7 +24,7 @@ import torch
 from loguru import logger
 from PIL import Image
 
-from cps.analysis.attention import attention_for_top_query
+from cps.analysis.attention import multi_layer_attention_for_image
 from cps.augmentations.base import CopyPasteConfig
 from cps.augmentations.simple_copy_paste import SimpleCopyPasteAugmentation
 from cps.data.coco import COCODataset, sample_to_torch
@@ -276,8 +276,22 @@ def run_fast_validation(
     step: int | None = None,
     score_threshold: float = 0.05,
     max_detections: int = 20,
+    class_agnostic_nms_iou: float | None = 0.5,
 ) -> None:
-    """Forward the probe set, log GT/pred/attention overlays to W&B."""
+    """Forward the probe set, log GT/pred/attention overlays to W&B.
+
+    Multi-layer attention: models that expose
+    ``outputs["multi_layer_attention"]`` (e.g. the DINOv3 ViT wrapper) get one
+    overlay column per logged layer (first / middle / last by default). Models
+    that only expose ``cross_attention`` keep producing the single "attention"
+    column so the existing dashboard layout stays compatible.
+
+    Duplicate-box cleanup: ``class_agnostic_nms_iou`` runs an additional NMS
+    that ignores class labels on top of torchvision's per-class NMS, which is
+    what was leaving "many low-confidence boxes around the same object" in the
+    rendered samples — those duplicates come from different classes voting on
+    the same region. The viz pass uses this; COCO eval does not.
+    """
 
     if not run or not probe.samples:
         return
@@ -290,8 +304,14 @@ def run_fast_validation(
     model.eval()
     gt_logs: list[Any] = []
     pred_logs: list[Any] = []
-    attn_logs: list[Any] = []
+    # layer name -> list of wandb.Image; preserves insertion order so the
+    # dashboard renders columns first → last consistently across epochs.
+    attn_logs_by_layer: dict[str, list[Any]] = {}
     table_rows: list[list[Any]] = []
+    # Layer order is locked in by the first sample's attention dict so every
+    # row of the wandb table has the same columns even when later samples
+    # somehow drop a layer (they shouldn't, but be defensive).
+    layer_order: list[str] = []
     try:
         with torch.inference_mode():
             for sample_idx, (image, target, kind) in enumerate(probe.samples):
@@ -308,6 +328,7 @@ def run_fast_validation(
                     max_detections=max_detections,
                     include_masks=True,
                     target_size_key="size",
+                    class_agnostic_nms_iou=class_agnostic_nms_iou,
                 )
                 gt_img = _render_overlay(img_dev, _gt_instances(target_dev), probe.cat_id_to_name)
                 pred_img = _render_overlay(img_dev, preds, probe.cat_id_to_name)
@@ -319,15 +340,31 @@ def run_fast_validation(
                 pred_log = wandb.Image(pred_img, caption=pred_caption)
                 gt_table = wandb.Image(gt_img, caption=gt_caption)
                 pred_table = wandb.Image(pred_img, caption=pred_caption)
-                attn_table = None
                 gt_logs.append(gt_log)
                 pred_logs.append(pred_log)
-                attention = attention_for_top_query(outputs, batch_idx=0)
-                if attention is not None:
+
+                # Per-layer attention overlays. ``multi_layer_attention_for_image``
+                # returns the multi-layer dict for ViT-style models or a
+                # single-key fallback for legacy single-attention models.
+                layer_attentions = multi_layer_attention_for_image(outputs, batch_idx=0) or {}
+                if not layer_order and layer_attentions:
+                    layer_order = list(layer_attentions.keys())
+                attn_imgs_for_row: list[Any] = []
+                for layer_name in layer_order:
+                    attention = layer_attentions.get(layer_name)
+                    if attention is None:
+                        attn_imgs_for_row.append(None)
+                        continue
                     attn_img = _attention_overlay(img_dev, attention)
-                    attn_caption = f"Attn {caption}"
-                    attn_logs.append(wandb.Image(attn_img, caption=attn_caption))
-                    attn_table = wandb.Image(attn_img, caption=attn_caption)
+                    attn_caption = f"Attn[{layer_name}] {caption}"
+                    log_img = wandb.Image(attn_img, caption=attn_caption)
+                    attn_logs_by_layer.setdefault(layer_name, []).append(log_img)
+                    # Use a fresh wandb.Image for the table cell; sharing one
+                    # across multiple table rows or top-level keys triggers
+                    # wandb to flatten media references and clobber captions.
+                    attn_imgs_for_row.append(
+                        wandb.Image(attn_img, caption=attn_caption)
+                    )
                 meta = target.get("augmentation_meta", {})
                 table_rows.append(
                     [
@@ -338,31 +375,47 @@ def run_fast_validation(
                         bool(meta.get("applied", False)) if isinstance(meta, dict) else False,
                         gt_table,
                         pred_table,
-                        attn_table,
+                        *attn_imgs_for_row,
                     ]
                 )
                 del outputs
 
+        # Single-layer models (legacy DETR/MaskRCNN with one ``cross_attention``)
+        # surface their fallback layer as the unnamed key ``"attention"``. We
+        # keep the original "attention" column name and ``fast_eval/attention``
+        # payload key in that case so existing dashboards and tests don't
+        # regress; multi-layer ViT outputs get one named column per layer.
+        legacy_single_layer = layer_order == ["attention"]
+        if legacy_single_layer:
+            attn_columns = ["attention"]
+            attn_payload_keys = {"attention": "fast_eval/attention"}
+        else:
+            attn_columns = [f"attention_{name}" for name in layer_order]
+            attn_payload_keys = {
+                name: f"fast_eval/attention_{name}" for name in layer_order
+            }
+        columns = [
+            "epoch",
+            "sample_index",
+            "image_id",
+            "probe_type",
+            "copy_paste_applied",
+            "ground_truth",
+            "prediction",
+            *attn_columns,
+        ]
         payload: dict[str, Any] = {
             "fast_eval/gt": gt_logs,
             "fast_eval/pred": pred_logs,
-            "fast_eval/samples": wandb.Table(
-                columns=[
-                    "epoch",
-                    "sample_index",
-                    "image_id",
-                    "probe_type",
-                    "copy_paste_applied",
-                    "ground_truth",
-                    "prediction",
-                    "attention",
-                ],
-                data=table_rows,
-            ),
+            "fast_eval/samples": wandb.Table(columns=columns, data=table_rows),
             "epoch": epoch,
         }
-        if attn_logs:
-            payload["fast_eval/attention"] = attn_logs
+        # One top-level grid per attention layer so the wandb media panel can
+        # show first/middle/last side-by-side at a glance, in addition to the
+        # tabular view above.
+        for layer_name, imgs in attn_logs_by_layer.items():
+            if imgs:
+                payload[attn_payload_keys[layer_name]] = imgs
         if step is not None:
             payload["step"] = step
         run.log(payload)

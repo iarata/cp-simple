@@ -271,6 +271,23 @@ def _fast_eval_max_detections(cfg: Any) -> int:
     return 20
 
 
+def _fast_eval_class_agnostic_nms_iou(cfg: Any) -> float | None:
+    """Returns the IoU used for the viz-only class-agnostic NMS, or None to disable.
+
+    Default 0.5: suppresses overlapping boxes regardless of class so the
+    rendered probe samples are readable. COCO eval keeps the original
+    per-class NMS, so this knob doesn't affect reported mAP.
+    """
+
+    fast_cfg = getattr(cfg.eval, "fast_eval", None)
+    if fast_cfg is None:
+        return 0.5
+    raw = getattr(fast_cfg, "class_agnostic_nms_iou", 0.5)
+    if raw is None:
+        return None
+    return float(raw)
+
+
 def _should_run_full_validation(epoch: int, total_epochs: int, eval_every: int) -> bool:
     is_final_epoch = epoch == total_epochs - 1
     return is_final_epoch or (eval_every > 0 and (epoch + 1) % eval_every == 0)
@@ -354,6 +371,7 @@ def run_training(cfg: Any) -> dict[str, Any]:
                     epoch=epoch,
                     score_threshold=_fast_eval_score_threshold(cfg),
                     max_detections=_fast_eval_max_detections(cfg),
+                    class_agnostic_nms_iou=_fast_eval_class_agnostic_nms_iou(cfg),
                 )
             except Exception as exc:  # pragma: no cover - W&B/media failures are non-fatal
                 logger.warning("Fast validation failed at epoch {}; continuing: {}", epoch, exc)

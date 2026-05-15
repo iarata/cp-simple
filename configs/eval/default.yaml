@@ -14,8 +14,17 @@ fast_eval:
   num_underrepresented: 3
   underrepresented_quantile: 0.25
   probe_seed: ${train.seed}
-  score_threshold: 0.05
-  max_detections: 20
+  # Viz threshold: 0.3 keeps mid-confidence detections so we can see how the
+  # model converges, while filtering the noise floor that fills the panel
+  # with low-score duplicates. 0.05 (COCO-eval default) makes the W&B images
+  # unreadable.
+  score_threshold: 0.3
+  max_detections: 10
+  # Class-agnostic NMS that runs after torchvision's per-class NMS. Drops
+  # boxes that overlap by ≥ this IoU regardless of class — fixes the
+  # "many overlapping boxes of the same thing" visualization issue. Set to
+  # null to disable.
+  class_agnostic_nms_iou: 0.5
   max_paste_objects: 2
 score_threshold: 0.05
 max_detections: 100

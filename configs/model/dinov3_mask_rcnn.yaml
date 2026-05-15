@@ -1,0 +1,39 @@
+name: dinov3_mask_rcnn
+family: dinov3_maskrcnn
+# DINOv3 ViT-S/16 — 22M params, patch 16 (cleanly divides 512), pretrained on
+# Meta's LVD-1689M SSL corpus. Strong object-centric features out of the box;
+# downstream heads converge in a fraction of the time the from-scratch Swin
+# baseline required.
+backbone_name: vit_small_patch16_dinov3
+backbone_pretrained: true
+backbone_freeze: false
+backbone_grad_checkpointing: true
+image_size: 512
+fpn_out_channels: 256
+# ImageNet normalization. DINOv3 weights expect these means/stds; do not change.
+image_mean: [0.485, 0.456, 0.406]
+image_std: [0.229, 0.224, 0.225]
+# Detection-head settings (kept identical to the Swin Mask R-CNN so the
+# augmentation comparison is fair)
+box_detections_per_image: 100
+box_score_thresh: 0.0
+box_nms_thresh: 0.5
+box_batch_size_per_image: 128
+box_positive_fraction: 0.25
+rpn_batch_size_per_image: 128
+rpn_positive_fraction: 0.5
+rpn_pre_nms_top_n_train: 1000
+rpn_pre_nms_top_n_test: 1000
+rpn_post_nms_top_n_train: 1000
+rpn_post_nms_top_n_test: 1000
+# 5-level FPN: ViTDet's Simple Feature Pyramid + LastLevelMaxPool.
+anchor_sizes: [[32], [64], [128], [256], [512]]
+anchor_aspect_ratios: [0.5, 1.0, 2.0]
+# Three depths whose feature-norm maps are logged each fast-eval cycle.
+# (0, 5, 11) = first / middle / last block for the 12-block ViT-S/16. Change
+# to e.g. (0, 11, 23) for ViT-L. The wrapper auto-clips out-of-range indices.
+attention_block_indices: [0, 5, 11]
+attention_layer_names: ["first", "middle", "last"]
+# Optional per-component loss weights. Mask R-CNN's losses are already
+# well-balanced; leave empty unless an experiment needs to up-weight masks.
+loss_weights: {}

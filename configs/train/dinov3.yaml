@@ -1,0 +1,19 @@
+defaults:
+  - default
+  - _self_
+
+# Training preset tuned for DINOv3-pretrained backbones. The pretrained
+# features are very strong, so the heads need less time and the backbone
+# needs *very* little fine-tuning — the LR ratio here is wider than the
+# Swin preset (head 2e-4 vs backbone 5e-6 ≈ 40×) on purpose.
+epochs: 36
+batch_size: 16
+lr: 0.0002
+backbone_lr: 0.000005  # 40× lower — DINOv3 features barely need tuning
+weight_decay: 0.0001
+warmup_steps: 500
+gradient_clip_norm: 1.0
+lr_schedule: cosine
+min_lr_ratio: 0.01
+eval_every: 0
+log_every: 20

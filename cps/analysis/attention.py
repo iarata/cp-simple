@@ -23,6 +23,39 @@ def attention_for_top_query(outputs: dict[str, torch.Tensor], batch_idx: int) ->
     return att.reshape(h, w).detach().cpu().numpy()
 
 
+def multi_layer_attention_for_image(
+    outputs: dict[str, Any],
+    batch_idx: int,
+) -> dict[str, np.ndarray] | None:
+    """Return per-layer attention maps for one image, keyed by layer name.
+
+    Models that expose multi-depth attention (DINOv3 ViT, future ViT-DETR
+    variants) populate ``outputs["multi_layer_attention"]`` as a dict of
+    ``(B, H, W)`` tensors. This helper slices the batch dimension and converts
+    each entry to a CPU NumPy array for visualisation.
+
+    Falls back to ``attention_for_top_query`` for legacy single-layer models so
+    callers don't need to special-case the older DETR/Swin attention shape.
+    """
+
+    multi = outputs.get("multi_layer_attention")
+    if isinstance(multi, dict) and multi:
+        out: dict[str, np.ndarray] = {}
+        for name, tensor in multi.items():
+            if not torch.is_tensor(tensor):
+                continue
+            if tensor.dim() == 2:
+                out[str(name)] = tensor.detach().cpu().numpy()
+            elif tensor.dim() == 3:
+                out[str(name)] = tensor[batch_idx].detach().cpu().numpy()
+        if out:
+            return out
+    fallback = attention_for_top_query(outputs, batch_idx)
+    if fallback is not None:
+        return {"attention": fallback}
+    return None
+
+
 def save_decoder_attention_maps(
     images: list[torch.Tensor],
     targets: list[dict[str, Any]],
