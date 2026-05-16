@@ -6,7 +6,7 @@ data.nosync
 *.pth
 *.pt
 models/runs
-
+experiments
 
 # Mac OS-specific storage files
 .DS_Store
